@@ -469,6 +469,12 @@ img{max-width:100%;height:auto}
   .dive{break-inside:avoid;page-break-inside:avoid}
   .dive>summary::before{display:none}
   input,textarea,select{border-color:#ccc;background:#fff}
+  /* Signed-off / read-only styling must not change the printed sheet */
+  #lockBanner,.lock-banner,.pdf-note{display:none!important}
+  #appView.locked #root :is(input,select,textarea),#root input[readonly]{background:#fff!important;color:var(--text)!important}
+  #appView.locked #root :is(canvas,[data-act]){opacity:1!important}
+  img.pending{background:none;min-height:0}
+  .sync,.back-btn{display:none!important}
 }
 </style>
 </head>
@@ -2031,6 +2037,12 @@ function clearAll() {
 /* === 20. Exports ================================================= */
 
 function exportPDF() {
+  if (navigator.standalone) {
+    // iOS Home Screen apps can't print. Hand over to Safari, which can.
+    const go = confirm('Export PDF needs Safari.\n\nOK opens this app in Safari — sign in, open this worksheet, then Options → Export PDF → Share → Save to Files / Print.');
+    if (go) window.open(location.href, '_blank');
+    return;
+  }
   const job  = $('#da_jobNo')?.value || 'Worksheet';
   const date = $('#da_date')?.value  || new Date().toISOString().slice(0, 10);
   const origTitle = document.title;
