@@ -116,6 +116,16 @@ img.pending{min-height:80px;background:repeating-linear-gradient(45deg,#f4f6fa,#
 .crew-row input[type=checkbox]{width:auto;min-height:0}
 @media(max-width:600px){ .crew-row{grid-template-columns:1fr 110px 60px 40px 32px;font-size:13px} }
 
+/* Region switch (dashboard) */
+.seg{display:inline-flex;border:1px solid var(--border-2);border-radius:var(--r);overflow:hidden;background:#fff}
+.seg button{border:none;background:#fff;padding:7px 16px;font:inherit;font-size:13px;font-weight:600;color:var(--navy);cursor:pointer;min-height:36px}
+.seg button+button{border-left:1px solid var(--border-2)}
+.seg button.active{background:var(--navy);color:#fff}
+.user-row{display:grid;grid-template-columns:1fr 1fr 130px 90px;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)}
+.user-row.head{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px}
+.user-row select{min-height:34px;padding:4px 8px}
+@media(max-width:600px){ .user-row{grid-template-columns:1fr 110px 80px;font-size:13px} .user-row .em{display:none} }
+
 /* Sync pill (worksheet header) */
 .sync{display:inline-flex;align-items:center;gap:6px;font-size:11px;opacity:.9;white-space:nowrap}
 .sync::before{content:'';width:8px;height:8px;border-radius:50%;background:#9aa4b2;flex:none}
@@ -527,9 +537,22 @@ img{max-width:100%;height:auto}
     <div id="pendingBanner" class="pending-banner hidden"></div>
     <div class="dash-top">
       <h1>Running Jobs</h1>
+      <div class="seg" id="regionSeg">
+        <button data-act="setViewRegion" data-region="NSW">NSW</button>
+        <button data-act="setViewRegion" data-region="WA">WA</button>
+        <button data-act="setViewRegion" data-region="ALL">All</button>
+      </div>
       <label><input type="checkbox" id="showDone"> Show completed</label>
+      <button class="btn ghost mgr-only" data-act="toggleUsers">🔑 Users</button>
       <button class="btn ghost mgr-only" data-act="toggleCrew">👥 Crew</button>
       <button class="btn mgr-only" data-act="newJob">+ New Job</button>
+    </div>
+    <div class="sec hidden" id="usersPanel">
+      <h2>Users <span class="muted" style="text-transform:none;font-weight:400">Home region decides what each person sees when they sign in; managers can run jobs, crew and users</span></h2>
+      <div class="user-row head"><span>Name</span><span class="em">Email</span><span>Role</span><span>Region</span></div>
+      <div id="userRows"></div>
+      <div class="muted mt">Add new people in Supabase → Authentication → Users; they appear here on their first sign-in.</div>
+      <div class="login-err" id="usersErr"></div>
     </div>
     <div class="sec hidden" id="crewPanel">
       <h2>Crew list <span class="muted" style="text-transform:none;font-weight:400">Names offered when building a team roster</span></h2>
@@ -756,6 +779,8 @@ let currentJob   = null;        // job row from Supabase
 let applying     = false;       // true while applyState() runs — suppress saves
 let editSeq = 0, syncedSeq = 0; // edit counter vs last pushed edit
 let crewList     = [];          // rows from the crew table
+let usersList    = [];          // profiles (managers only)
+let viewRegion   = 'NSW';       // dashboard filter: NSW | WA | ALL
 const BUCKET     = 'worksheet-files';
 const fileCache  = new Map();   // storage path -> object URL / data URL
 
@@ -2375,7 +2400,9 @@ const ACT = {
   lockWs:            lockWorksheet,
   unlockWs:          unlockWorksheet,
   deleteWs:          deleteWorksheet,
-  toggleCrew:        () => { $('#crewPanel').classList.toggle('hidden'); renderCrew(); },
+  toggleCrew:        () => { $('#crewPanel').classList.toggle('hidden'); $('#usersPanel').classList.add('hidden'); renderCrew(); },
+  toggleUsers:       () => { $('#usersPanel').classList.toggle('hidden'); $('#crewPanel').classList.add('hidden'); loadUsers(); },
+  setViewRegion:     el => setViewRegion(el.dataset.region),
   addCrew:           addCrew,
   removeCrew:        el => removeCrew(el.dataset.id),
   showSummary:       el => showSummary(el.dataset.job),
@@ -2434,6 +2461,8 @@ document.addEventListener('change', e => {
   if (t.matches('[data-drop="perm"]'))             handlePermitFiles(t.files);
   if (t.matches('[data-act="loadFile"]'))          loadFromFile(t);
   if (t.matches('[data-crew-active]'))             setCrewActive(t.dataset.crewActive, t.checked);
+  if (t.matches('[data-user-role]'))               setUserField(t.dataset.userRole, 'role', t.value);
+  if (t.matches('[data-user-region]'))             setUserField(t.dataset.userRegion, 'region', t.value || null);
 });
 
 /* Drop zones — drag/drop support for SWMS + Permits */
@@ -2501,15 +2530,20 @@ async function initAuth() {
 async function onSignedIn(user) {
   me = { id: user.id, email: user.email, name: user.user_metadata?.full_name || user.email.split('@')[0], role: 'supervisor' };
   try {
-    const { data } = await sb.from('profiles').select('full_name, role').eq('id', user.id).maybeSingle();
+    const { data } = await sb.from('profiles').select('full_name, role, region').eq('id', user.id).maybeSingle();
     if (data?.full_name) me.name = data.full_name;
     if (data?.role) me.role = data.role;
+    me.region = data?.region || null;
     try { localStorage.setItem('franmarine_me', JSON.stringify(me)); } catch (e) {}
   } catch (e) {
     try { const c = JSON.parse(localStorage.getItem('franmarine_me')); if (c?.id === user.id) me = c; } catch (e2) {}
   }
   $('#userChip').textContent = me.name + (isManager() ? '' : ' · supervisor');
   $$('.mgr-only').forEach(el => el.classList.toggle('hidden', !isManager()));
+  // Land in the user's home region; remember a manual switch per device
+  let saved = null; try { saved = localStorage.getItem('franmarine_view_region_' + me.id); } catch (e) {}
+  viewRegion = saved || me.region || 'NSW';
+  paintRegionSeg();
   await loadDashboard();
   showView('dash');
 }
@@ -2576,15 +2610,27 @@ async function loadDashboard(manual = false) {
   if (manual) toast('↻ Refreshed');
 }
 
+function setViewRegion(r) {
+  viewRegion = r;
+  try { localStorage.setItem('franmarine_view_region_' + me.id, r); } catch (e) {}
+  paintRegionSeg(); renderJobs(); renderCrewDatalist(); if (!$('#crewPanel').classList.contains('hidden')) renderCrew();
+}
+function paintRegionSeg() {
+  $$('#regionSeg button').forEach(b => b.classList.toggle('active', b.dataset.region === viewRegion));
+  $('.dash-top h1').textContent = viewRegion === 'ALL' ? 'Running Jobs — all regions' : `Running Jobs — ${viewRegion}`;
+}
+const inRegion = r => viewRegion === 'ALL' || !r || r === viewRegion;
+
 function renderJobs() {
   const showDone = $('#showDone').checked;
   const today = todayISO();
   const lateMorning = new Date().getHours() >= 9;
   const mgr = isManager();
-  const jobs = Object.values(jobsById).filter(j => showDone || j.status === 'active');
+  const jobs = Object.values(jobsById).filter(j => (showDone || j.status === 'active') && inRegion(j.region));
   const wrap = $('#jobCards');
   if (!jobs.length) {
-    wrap.innerHTML = `<div class="empty">${showDone ? 'No jobs yet.' : 'No running jobs. Add one with <b>+ New Job</b>.'}</div>`;
+    const where = viewRegion === 'ALL' ? '' : ` in ${viewRegion}`;
+    wrap.innerHTML = `<div class="empty">${showDone ? `No jobs${where} yet.` : `No running jobs${where}.${mgr ? ' Add one with <b>+ New Job</b>.' : ''}`}</div>`;
     return;
   }
   wrap.innerHTML = jobs.map(j => {
@@ -2631,7 +2677,7 @@ function showJobForm(job) {
   $('#jobFormTitle').textContent = job ? `Edit ${job.job_no}` : 'New Job';
   $('#jf_id').value = job?.id || '';
   for (const k of ['job_no','project','region','client','location','vessel','supervisor','contact','contact_ph'])
-    $('#jf_' + k).value = job?.[k] ?? (k === 'region' ? 'NSW' : '');
+    $('#jf_' + k).value = job?.[k] ?? (k === 'region' ? (viewRegion === 'ALL' ? (me.region || 'NSW') : viewRegion) : '');
   $('#jobErr').textContent = '';
   $('#deleteJobBtn').classList.toggle('hidden', !job || (job.worksheets || []).length > 0);
   $('#jobForm').scrollIntoView({ behavior:'smooth', block:'start' });
@@ -2797,6 +2843,7 @@ async function openWorksheet(ws, job) {
     showView('app'); setSync('offline', 'Offline — could not load this worksheet');
   }
   prefillFromJob(job, ws.ws_date);
+  renderCrewDatalist();
   lockJobFields(job, ws.ws_date);
   if (REGION_CONFIG[job.region] && currentRegion() !== job.region) { setRegion(job.region, true); editSeq++; saveState(); }
   applyLock();
@@ -2987,13 +3034,47 @@ function showSummary(jobId) {
   $('#summaryPanel').scrollIntoView({ behavior:'smooth', block:'start' });
 }
 
+/* ---- Users (managers) ---- */
+async function loadUsers() {
+  if (!isManager() || $('#usersPanel').classList.contains('hidden')) return;
+  if (!online()) { $('#usersErr').textContent = 'Offline — user list needs a connection.'; return; }
+  const { data, error } = await sb.from('profiles').select('id, email, full_name, role, region').order('full_name');
+  if (error) { $('#usersErr').textContent = error.message; return; }
+  usersList = data; $('#usersErr').textContent = ''; renderUsers();
+}
+function renderUsers() {
+  $('#userRows').innerHTML = usersList.map(u => `
+    <div class="user-row">
+      <span><b>${esc(u.full_name || u.email?.split('@')[0] || '—')}</b>${u.id === me.id ? ' <span class="muted">(you)</span>' : ''}</span>
+      <span class="muted em">${esc(u.email || '')}</span>
+      <select data-user-role="${u.id}" ${u.id === me.id ? 'disabled title="You can\'t change your own role"' : ''}>
+        <option value="manager" ${u.role === 'manager' ? 'selected' : ''}>Manager</option>
+        <option value="supervisor" ${u.role !== 'manager' ? 'selected' : ''}>Supervisor</option>
+      </select>
+      <select data-user-region="${u.id}">
+        <option value="" ${!u.region ? 'selected' : ''}>—</option>
+        <option ${u.region === 'NSW' ? 'selected' : ''}>NSW</option>
+        <option ${u.region === 'WA' ? 'selected' : ''}>WA</option>
+      </select>
+    </div>`).join('') || '<div class="muted" style="padding:8px 0">No users yet.</div>';
+}
+async function setUserField(id, field, value) {
+  const { error } = await sb.from('profiles').update({ [field]: value }).eq('id', id);
+  if (error) { $('#usersErr').textContent = error.message; await loadUsers(); return; }
+  const u = usersList.find(x => x.id === id); if (u) u[field] = value;
+  if (id === me.id && field === 'region') me.region = value;
+  toast('✓ Saved');
+}
+
 /* ---- Crew list ---- */
 function renderCrewDatalist() {
-  const active = crewList.filter(c => c.active !== false);
+  const regionOf = currentJob?.region || (viewRegion === 'ALL' ? null : viewRegion);
+  const active = crewList.filter(c => c.active !== false && (!regionOf || !c.region || c.region === regionOf));
   $('#crewList').innerHTML = active.map(c => `<option value="${esc(c.name)}">${esc([c.position, c.region].filter(Boolean).join(' · '))}</option>`).join('');
 }
 function renderCrew() {
-  $('#crewRows').innerHTML = crewList.map(c => `
+  $('#cf_region').value = viewRegion === 'ALL' ? (me.region || 'NSW') : viewRegion;
+  $('#crewRows').innerHTML = crewList.filter(c => inRegion(c.region)).map(c => `
     <div class="crew-row">
       <span>${esc(c.name)}</span><span class="muted">${esc(c.position || '')}</span><span class="muted">${esc(c.region || '')}</span>
       <input type="checkbox" data-crew-active="${c.id}" ${c.active !== false ? 'checked' : ''}>
