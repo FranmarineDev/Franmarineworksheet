@@ -537,18 +537,13 @@ img{max-width:100%;height:auto}
     <div id="pendingBanner" class="pending-banner hidden"></div>
     <div class="dash-top">
       <h1>Running Jobs</h1>
-      <div class="seg" id="regionSeg">
-        <button data-act="setViewRegion" data-region="NSW">NSW</button>
-        <button data-act="setViewRegion" data-region="WA">WA</button>
-        <button data-act="setViewRegion" data-region="ALL">All</button>
-      </div>
       <label><input type="checkbox" id="showDone"> Show completed</label>
       <button class="btn ghost mgr-only" data-act="toggleUsers">🔑 Users</button>
       <button class="btn ghost mgr-only" data-act="toggleCrew">👥 Crew</button>
       <button class="btn mgr-only" data-act="newJob">+ New Job</button>
     </div>
     <div class="sec hidden" id="usersPanel">
-      <h2>Users <span class="muted" style="text-transform:none;font-weight:400">People only see their own region's jobs, crew and worksheets. "National" sees every region.</span></h2>
+      <h2>Users <span class="muted" style="text-transform:none;font-weight:400">People only see their own region's jobs, crew and worksheets. New accounts start in NSW — move them here if they belong in WA.</span></h2>
       <div class="user-row head"><span>Name</span><span class="em">Email</span><span>Role</span><span>Region</span></div>
       <div id="userRows"></div>
       <div class="muted mt">Add new people in Supabase → Authentication → Users; they appear here on their first sign-in.</div>
@@ -2402,7 +2397,6 @@ const ACT = {
   deleteWs:          deleteWorksheet,
   toggleCrew:        () => { $('#crewPanel').classList.toggle('hidden'); $('#usersPanel').classList.add('hidden'); renderCrew(); },
   toggleUsers:       () => { $('#usersPanel').classList.toggle('hidden'); $('#crewPanel').classList.add('hidden'); loadUsers(); },
-  setViewRegion:     el => setViewRegion(el.dataset.region),
   addCrew:           addCrew,
   removeCrew:        el => removeCrew(el.dataset.id),
   showSummary:       el => showSummary(el.dataset.job),
@@ -2540,11 +2534,9 @@ async function onSignedIn(user) {
   }
   $('#userChip').textContent = me.name + (isManager() ? '' : ' · supervisor');
   $$('.mgr-only').forEach(el => el.classList.toggle('hidden', !isManager()));
-  // Regional users are pinned to their home region (the database enforces it too).
-  // National users (no region) get the NSW / WA / All switch, remembered per device.
-  if (me.region) viewRegion = me.region;
-  else { let saved = null; try { saved = localStorage.getItem('franmarine_view_region_' + me.id); } catch (e) {} viewRegion = saved || 'ALL'; }
-  $('#regionSeg').classList.toggle('hidden', !!me.region);
+  // Everyone is pinned to their home region (the database enforces it too)
+  me.region = me.region || 'NSW';
+  viewRegion = me.region;
   ['#usersPanel', '#crewPanel', '#jobForm', '#summaryPanel'].forEach(id => $(id).classList.add('hidden'));
   usersList = []; $('#userRows').innerHTML = ''; $('#usersErr').textContent = '';
   paintRegionSeg();
@@ -2614,18 +2606,11 @@ async function loadDashboard(manual = false) {
   if (manual) toast('↻ Refreshed');
 }
 
-function setViewRegion(r) {
-  if (me.region) return;                       // pinned
-  viewRegion = r;
-  try { localStorage.setItem('franmarine_view_region_' + me.id, r); } catch (e) {}
-  paintRegionSeg(); renderJobs(); renderCrewDatalist(); if (!$('#crewPanel').classList.contains('hidden')) renderCrew();
-}
 function paintRegionSeg() {
-  $$('#regionSeg button').forEach(b => b.classList.toggle('active', b.dataset.region === viewRegion));
-  $('.dash-top h1').textContent = viewRegion === 'ALL' ? 'Running Jobs — all regions' : `Running Jobs — ${viewRegion}`;
-  $('#jf_region').disabled = !!me.region;      // regional managers can only create jobs in their region
+  $('.dash-top h1').textContent = `Running Jobs — ${viewRegion}`;
+  $('#jf_region').disabled = true;             // jobs are always created in your own region
 }
-const inRegion = r => viewRegion === 'ALL' || !r || r === viewRegion;
+const inRegion = r => !r || r === viewRegion;
 
 function renderJobs() {
   const showDone = $('#showDone').checked;
@@ -2635,7 +2620,7 @@ function renderJobs() {
   const jobs = Object.values(jobsById).filter(j => (showDone || j.status === 'active') && inRegion(j.region));
   const wrap = $('#jobCards');
   if (!jobs.length) {
-    const where = viewRegion === 'ALL' ? '' : ` in ${viewRegion}`;
+    const where = ` in ${viewRegion}`;
     wrap.innerHTML = `<div class="empty">${showDone ? `No jobs${where} yet.` : `No running jobs${where}.${mgr ? ' Add one with <b>+ New Job</b>.' : ''}`}</div>`;
     return;
   }
@@ -2683,7 +2668,7 @@ function showJobForm(job) {
   $('#jobFormTitle').textContent = job ? `Edit ${job.job_no}` : 'New Job';
   $('#jf_id').value = job?.id || '';
   for (const k of ['job_no','project','region','client','location','vessel','supervisor','contact','contact_ph'])
-    $('#jf_' + k).value = job?.[k] ?? (k === 'region' ? (me.region || (viewRegion === 'ALL' ? 'NSW' : viewRegion)) : '');
+    $('#jf_' + k).value = job?.[k] ?? (k === 'region' ? me.region : '');
   $('#jobErr').textContent = '';
   $('#deleteJobBtn').classList.toggle('hidden', !job || (job.worksheets || []).length > 0);
   $('#jobForm').scrollIntoView({ behavior:'smooth', block:'start' });
@@ -3049,7 +3034,7 @@ async function loadUsers() {
   usersList = data; $('#usersErr').textContent = ''; renderUsers();
 }
 function renderUsers() {
-  const visible = usersList.filter(u => !me.region || !u.region || u.region === me.region);
+  const visible = usersList.filter(u => (u.region || 'NSW') === me.region);
   $('#userRows').innerHTML = visible.map(u => `
     <div class="user-row">
       <span><b>${esc(u.full_name || u.email?.split('@')[0] || '—')}</b>${u.id === me.id ? ' <span class="muted">(you)</span>' : ''}</span>
@@ -3058,32 +3043,32 @@ function renderUsers() {
         <option value="manager" ${u.role === 'manager' ? 'selected' : ''}>Manager</option>
         <option value="supervisor" ${u.role !== 'manager' ? 'selected' : ''}>Supervisor</option>
       </select>
-      <select data-user-region="${u.id}" ${me.region && u.id === me.id ? 'disabled title="Ask a national manager to change your region"' : ''}>
-        <option value="" ${!u.region ? 'selected' : ''}>National (all)</option>
-        <option ${u.region === 'NSW' ? 'selected' : ''}>NSW</option>
+      <select data-user-region="${u.id}" ${u.id === me.id ? 'disabled title="Another manager must move you"' : ''} title="Moving someone to the other region hands them over — they disappear from this list">
+        <option ${(u.region || 'NSW') === 'NSW' ? 'selected' : ''}>NSW</option>
         <option ${u.region === 'WA' ? 'selected' : ''}>WA</option>
       </select>
     </div>`).join('') || '<div class="muted" style="padding:8px 0">No users yet.</div>';
 }
 async function setUserField(id, field, value) {
-  if (field === 'region' && me.region && value !== me.region) {
-    $('#usersErr').textContent = 'Only a national manager can move people to another region.'; renderUsers(); return;
+  if (field === 'region' && value !== me.region) {
+    const u = usersList.find(x => x.id === id);
+    if (!confirm(`Move ${u?.full_name || 'this person'} to ${value}? They will only see ${value} jobs from now on, and only a ${value} manager can move them back.`)) { renderUsers(); return; }
   }
   const { error } = await sb.from('profiles').update({ [field]: value }).eq('id', id);
   if (error) { $('#usersErr').textContent = error.message; await loadUsers(); return; }
   const u = usersList.find(x => x.id === id); if (u) u[field] = value;
-  if (id === me.id && field === 'region') { me.region = value; toast('✓ Saved — sign out and back in to apply', 3000); return; }
+  if (field === 'region' && value !== me.region) renderUsers();   // handed over → drops off this list
   toast('✓ Saved');
 }
 
 /* ---- Crew list ---- */
 function renderCrewDatalist() {
-  const regionOf = currentJob?.region || (viewRegion === 'ALL' ? null : viewRegion);
+  const regionOf = currentJob?.region || viewRegion;
   const active = crewList.filter(c => c.active !== false && (!regionOf || !c.region || c.region === regionOf));
   $('#crewList').innerHTML = active.map(c => `<option value="${esc(c.name)}">${esc([c.position, c.region].filter(Boolean).join(' · '))}</option>`).join('');
 }
 function renderCrew() {
-  $('#cf_region').value = viewRegion === 'ALL' ? (me.region || 'NSW') : viewRegion;
+  $('#cf_region').value = viewRegion; $('#cf_region').disabled = true;
   $('#crewRows').innerHTML = crewList.filter(c => inRegion(c.region)).map(c => `
     <div class="crew-row">
       <span>${esc(c.name)}</span><span class="muted">${esc(c.position || '')}</span><span class="muted">${esc(c.region || '')}</span>

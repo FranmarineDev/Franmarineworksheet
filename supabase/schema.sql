@@ -16,16 +16,20 @@ create table if not exists public.profiles (
 );
 alter table public.profiles add column if not exists role   text not null default 'supervisor';
 alter table public.profiles add column if not exists region text check (region in ('NSW', 'WA'));   -- home region
+update public.profiles set region = 'NSW' where region is null;   -- everyone belongs to a region
+alter table public.profiles alter column region set default 'NSW';
+alter table public.profiles alter column region set not null;
 
 -- First person to sign up becomes a manager; everyone after is a supervisor
 -- until a manager changes their role in Table Editor → profiles.
 create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
-  insert into public.profiles (id, email, full_name, role)
+  insert into public.profiles (id, email, full_name, role, region)
   values (new.id, new.email,
           coalesce(new.raw_user_meta_data ->> 'full_name', split_part(new.email, '@', 1)),
-          case when (select count(*) from public.profiles) = 0 then 'manager' else 'supervisor' end)
+          case when (select count(*) from public.profiles) = 0 then 'manager' else 'supervisor' end,
+          'NSW')   -- new people start in NSW; a manager moves them to WA if needed
   on conflict (id) do nothing;
   return new;
 end; $$;
@@ -40,16 +44,16 @@ returns boolean language sql stable security definer set search_path = public as
   select exists (select 1 from public.profiles where id = auth.uid() and role = 'manager');
 $$;
 
--- Home region of the signed-in user. NULL = national (sees every region).
+-- Home region of the signed-in user.
 create or replace function public.my_region()
 returns text language sql stable security definer set search_path = public as $$
   select region from public.profiles where id = auth.uid();
 $$;
 
--- Can the signed-in user see things belonging to this region?
+-- Can the signed-in user see things belonging to this region? Strictly their own.
 create or replace function public.can_see_region(r text)
 returns boolean language sql stable security definer set search_path = public as $$
-  select public.my_region() is null or r is null or r = public.my_region();
+  select r = public.my_region();
 $$;
 
 -- ---------- Crew list (names offered when building a team roster) ----------
@@ -57,10 +61,14 @@ create table if not exists public.crew (
   id         uuid primary key default gen_random_uuid(),
   name       text not null,
   position   text,
-  region     text check (region in ('NSW', 'WA')),
+  region     text not null default 'NSW' check (region in ('NSW', 'WA')),
   active     boolean not null default true,
   created_at timestamptz not null default now()
 );
+
+update public.crew set region = 'NSW' where region is null;
+alter table public.crew alter column region set default 'NSW';
+alter table public.crew alter column region set not null;
 
 -- ---------- Jobs ----------
 create table if not exists public.jobs (
@@ -133,8 +141,10 @@ create policy "profiles: edit own" on public.profiles for update to authenticate
 -- Managers set everyone's role and home region (the app's Users panel)
 create policy "profiles: managers edit" on public.profiles for update to authenticated
   using (public.is_manager() and public.can_see_region(region)) with check (public.is_manager());
+  -- (using = the person is currently in my region; with check has no region test so a
+  --  manager can hand someone over to the other region)
 
--- Everything below is REGION-SCOPED: you only see your home region (NULL region = national, sees all).
+-- Everything below is REGION-SCOPED: you only ever see your own region.
 create policy "crew: read"           on public.crew for select to authenticated using (public.can_see_region(region));
 create policy "crew: managers write" on public.crew for all    to authenticated
   using (public.is_manager() and public.can_see_region(region)) with check (public.is_manager() and public.can_see_region(region));
