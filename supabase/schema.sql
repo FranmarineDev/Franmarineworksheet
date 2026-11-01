@@ -40,6 +40,18 @@ returns boolean language sql stable security definer set search_path = public as
   select exists (select 1 from public.profiles where id = auth.uid() and role = 'manager');
 $$;
 
+-- Home region of the signed-in user. NULL = national (sees every region).
+create or replace function public.my_region()
+returns text language sql stable security definer set search_path = public as $$
+  select region from public.profiles where id = auth.uid();
+$$;
+
+-- Can the signed-in user see things belonging to this region?
+create or replace function public.can_see_region(r text)
+returns boolean language sql stable security definer set search_path = public as $$
+  select public.my_region() is null or r is null or r = public.my_region();
+$$;
+
 -- ---------- Crew list (names offered when building a team roster) ----------
 create table if not exists public.crew (
   id         uuid primary key default gen_random_uuid(),
@@ -120,22 +132,30 @@ create policy "profiles: edit own" on public.profiles for update to authenticate
   using (auth.uid() = id) with check (auth.uid() = id and role = (select role from public.profiles p where p.id = auth.uid()));
 -- Managers set everyone's role and home region (the app's Users panel)
 create policy "profiles: managers edit" on public.profiles for update to authenticated
-  using (public.is_manager()) with check (public.is_manager());
+  using (public.is_manager() and public.can_see_region(region)) with check (public.is_manager());
 
-create policy "crew: read"           on public.crew for select to authenticated using (true);
-create policy "crew: managers write" on public.crew for all    to authenticated using (public.is_manager()) with check (public.is_manager());
+-- Everything below is REGION-SCOPED: you only see your home region (NULL region = national, sees all).
+create policy "crew: read"           on public.crew for select to authenticated using (public.can_see_region(region));
+create policy "crew: managers write" on public.crew for all    to authenticated
+  using (public.is_manager() and public.can_see_region(region)) with check (public.is_manager() and public.can_see_region(region));
 
--- Jobs: managers create / edit / complete / delete; supervisors read
-create policy "jobs: read"           on public.jobs for select to authenticated using (true);
-create policy "jobs: managers write" on public.jobs for all    to authenticated using (public.is_manager()) with check (public.is_manager());
+-- Jobs: managers create / edit / complete / delete within their region; supervisors read their region
+create policy "jobs: read"           on public.jobs for select to authenticated using (public.can_see_region(region));
+create policy "jobs: managers write" on public.jobs for all    to authenticated
+  using (public.is_manager() and public.can_see_region(region)) with check (public.is_manager() and public.can_see_region(region));
 
--- Worksheets: anyone signed in can create and edit, but a signed-off (locked)
--- sheet can only be changed by a manager (that is how it gets unlocked).
-create policy "worksheets: read"   on public.worksheets for select to authenticated using (true);
-create policy "worksheets: insert" on public.worksheets for insert to authenticated with check (true);
+-- Worksheets follow their job's region. A signed-off (locked) sheet can only be
+-- changed by a manager (that is how it gets unlocked).
+create or replace function public.can_see_job(j uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.jobs where id = j and public.can_see_region(region));
+$$;
+create policy "worksheets: read"   on public.worksheets for select to authenticated using (public.can_see_job(job_id));
+create policy "worksheets: insert" on public.worksheets for insert to authenticated with check (public.can_see_job(job_id));
 create policy "worksheets: update" on public.worksheets for update to authenticated
-  using (not locked or public.is_manager()) with check (true);
-create policy "worksheets: managers delete" on public.worksheets for delete to authenticated using (public.is_manager());
+  using (public.can_see_job(job_id) and (not locked or public.is_manager())) with check (public.can_see_job(job_id));
+create policy "worksheets: managers delete" on public.worksheets for delete to authenticated
+  using (public.is_manager() and public.can_see_job(job_id));
 
 -- ---------- Storage bucket for SWMS / permit files ----------
 insert into storage.buckets (id, name, public, file_size_limit)
@@ -146,10 +166,16 @@ drop policy if exists "worksheet-files: read"   on storage.objects;
 drop policy if exists "worksheet-files: write"  on storage.objects;
 drop policy if exists "worksheet-files: update" on storage.objects;
 drop policy if exists "worksheet-files: delete" on storage.objects;
-create policy "worksheet-files: read"   on storage.objects for select to authenticated using (bucket_id = 'worksheet-files');
-create policy "worksheet-files: write"  on storage.objects for insert to authenticated with check (bucket_id = 'worksheet-files');
-create policy "worksheet-files: update" on storage.objects for update to authenticated using (bucket_id = 'worksheet-files');
-create policy "worksheet-files: delete" on storage.objects for delete to authenticated using (bucket_id = 'worksheet-files');
+-- Object paths are "<worksheet id>/<file id>/<page>", so visibility follows the worksheet
+create or replace function public.can_see_file(path text)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.worksheets w
+                 where w.id::text = split_part(path, '/', 1) and public.can_see_job(w.job_id));
+$$;
+create policy "worksheet-files: read"   on storage.objects for select to authenticated using (bucket_id = 'worksheet-files' and public.can_see_file(name));
+create policy "worksheet-files: write"  on storage.objects for insert to authenticated with check (bucket_id = 'worksheet-files' and public.can_see_file(name));
+create policy "worksheet-files: update" on storage.objects for update to authenticated using (bucket_id = 'worksheet-files' and public.can_see_file(name));
+create policy "worksheet-files: delete" on storage.objects for delete to authenticated using (bucket_id = 'worksheet-files' and public.can_see_file(name));
 
 -- ---------- Reporting views (read these from the SQL editor, or feed CrewHub / the regional report) ----------
 create or replace view public.job_summary as
@@ -178,4 +204,6 @@ from public.worksheets w
 join public.jobs j on j.id = w.job_id
 cross join lateral jsonb_array_elements(coalesce(w.summary->'divers', '[]'::jsonb)) d;
 
--- Views inherit the RLS of the tables underneath, so they need a login too.
+-- Make the views run as the person querying them, so region scoping applies there too.
+alter view public.job_summary set (security_invoker = on);
+alter view public.diver_hours set (security_invoker = on);
