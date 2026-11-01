@@ -239,6 +239,8 @@ td.tagged input{flex:1;min-width:0}
 .region button{padding:10px 24px;border:2px solid var(--border);background:#fff;
   border-radius:var(--r);font-weight:600;cursor:pointer;font:inherit}
 .region button.active{background:var(--navy);color:#fff;border-color:var(--navy)}
+.region button:disabled{cursor:default;opacity:.55}
+.region button.active:disabled{opacity:1}
 
 .team-row{display:flex;gap:6px;align-items:center;margin-bottom:4px}
 .team-row input{flex:1}
@@ -589,6 +591,7 @@ img{max-width:100%;height:auto}
       <button data-act="toggleMode" id="modeBtn" class="edit-only">Switch to Non-Diving Mode</button>
       <button data-act="lockWs" id="lockBtn">🔒 Sign off &amp; lock</button>
       <button data-act="unlockWs" id="unlockBtn" class="hidden">🔓 Unlock (manager)</button>
+      <button data-act="deleteWs" id="deleteWsBtn" class="danger mgr-only">🗑 Delete this day sheet</button>
       <button class="danger edit-only" data-act="clearAll">🗑 Clear this worksheet</button>
     </div>
   </div>
@@ -806,8 +809,9 @@ function pageDaily() {
     <div class="sec">
       <h2>Region</h2>
       <div class="region" id="regionToggle">
-        <button type="button" data-act="region" data-region="NSW">NSW</button>
-        <button type="button" data-act="region" data-region="WA">WA</button>
+        <button type="button" data-act="region" data-region="NSW" disabled>NSW</button>
+        <button type="button" data-act="region" data-region="WA" disabled>WA</button>
+        <span class="muted" style="align-self:center">Set by the job card — chamber and hat lists follow it.</span>
       </div>
     </div>
 
@@ -2337,7 +2341,7 @@ function exportDiveCSV() {
 const ACT = {
   toggleSide:  toggleSidebar,
   toggleOpt:   toggleOptMenu,
-  region:      el => setRegion(el.dataset.region),
+  region:      el => { if (!el.disabled) setRegion(el.dataset.region); },
   addTeam:     () => addTeamMember(''),
   removeTeam:  el => removeTeamMember(+el.dataset.idx),
   clearSig:    el => clearSig(el.dataset.sigId),
@@ -2370,6 +2374,7 @@ const ACT = {
   backToJobs:        backToJobs,
   lockWs:            lockWorksheet,
   unlockWs:          unlockWorksheet,
+  deleteWs:          deleteWorksheet,
   toggleCrew:        () => { $('#crewPanel').classList.toggle('hidden'); renderCrew(); },
   addCrew:           addCrew,
   removeCrew:        el => removeCrew(el.dataset.id),
@@ -2709,7 +2714,6 @@ async function openTodayWorksheet(jobId) {
       const pd = p.data || {};
       init.team = (pd.team || []).filter(Boolean);
       init.divingMode = pd.divingMode !== false;
-      init.region = pd.region || init.region;
       for (const [k, v] of Object.entries(pd.fields || {})) if (CARRY_RE.test(k) && v) init.fields[k] = v;
       for (let i = 0; i < NUM_DIVERS; i++) { const n = pd.fields?.[`diver_${i}_name`]; if (n) init.fields[`diver_${i}_name`] = n; }
       // SWMS document carries over too (same job, same SWMS) — pages are storage paths, so no re-upload
@@ -2794,6 +2798,7 @@ async function openWorksheet(ws, job) {
   }
   prefillFromJob(job, ws.ws_date);
   lockJobFields(job, ws.ws_date);
+  if (REGION_CONFIG[job.region] && currentRegion() !== job.region) { setRegion(job.region, true); editSeq++; saveState(); }
   applyLock();
   activeTab = null; switchTab('daily');
   document.title = `${job.job_no} — Daily Worksheet ${fmtDate(ws.ws_date)}`;
@@ -2816,6 +2821,28 @@ async function lockWorksheet() {
   currentWs.version = data[0].version; currentWs.locked = true; currentWs.lockedBy = me.name; currentWs.lockedAt = data[0].locked_at;
   const c = readCache(); if (c) writeCache(c.data, currentWs.version, false, c.seq);
   applyLock(); toast('🔒 Signed off', 1800);
+}
+
+async function deleteWorksheet() {
+  if (!currentWs || !isManager()) return;
+  if (!online()) { toast('Deleting needs a connection', 2200); return; }
+  const label = `${currentJob?.job_no || ''} — ${fmtDate(currentWs.ws_date)}`;
+  if (!confirm(`Delete the day sheet for ${label}?\n\nThis removes the worksheet and its uploaded SWMS/permit files for everyone. It cannot be undone.`)) return;
+  if (!confirm('Really delete? Last chance.')) return;
+  clearTimeout(saveTimer); clearTimeout(pushTimer);
+  const wsId = currentWs.id;
+  try {
+    const refs = [swmsFile, ...permitFiles].filter(Boolean).flatMap(e => [e.raw, ...(e.pages || [])]).filter(r => r && !isDataRef(r));
+    if (refs.length) await sb.storage.from(BUCKET).remove(refs);
+    const { error } = await sb.from('worksheets').delete().eq('id', wsId);
+    if (error) throw error;
+  } catch (e) { toast('✗ Delete failed: ' + e.message, 3000); return; }
+  try { localStorage.removeItem(keyFor(wsId)); } catch (e) {}
+  currentWs = null; currentJob = null;
+  document.title = 'Franmarine — Daily Worksheet';
+  showView('dash');
+  await loadDashboard();
+  toast('🗑 Day sheet deleted', 2000);
 }
 
 async function unlockWorksheet() {
