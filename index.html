@@ -2036,24 +2036,215 @@ function clearAll() {
 
 /* === 20. Exports ================================================= */
 
-function exportPDF() {
+async function exportPDF() {
   if (navigator.standalone) {
     // iOS Home Screen apps can't print. Hand over to Safari, which can.
     const go = confirm('Export PDF needs Safari.\n\nOK opens this app in Safari — sign in, open this worksheet, then Options → Export PDF → Share → Save to Files / Print.');
     if (go) window.open(location.href, '_blank');
     return;
   }
+  toast('Preparing PDF…', 4000);
   const job  = $('#da_jobNo')?.value || 'Worksheet';
-  const date = $('#da_date')?.value  || new Date().toISOString().slice(0, 10);
+  const date = $('#da_date')?.value  || todayISO();
+  let html;
+  try { html = await buildReportHTML(); }
+  catch (e) { console.warn(e); alert('Could not build the PDF: ' + e.message); return; }
   const origTitle = document.title;
-  document.title = `${job} - Daily Worksheet - ${date}`;
-  $$('.page').forEach(p => p.classList.add('active'));
-  hideEmptyForPrint();
-  setTimeout(() => {
-    window.print();
-    restoreAfterPrint();
-    document.title = origTitle;
-  }, 200);
+  document.title = `${job}_${date}_DailyWorksheet`.replace(/\s+/g, '_');
+  $('#reportFrame')?.remove();
+  const f = document.createElement('iframe');
+  f.id = 'reportFrame';
+  f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden';
+  document.body.appendChild(f);
+  f.srcdoc = html;
+  f.onload = async () => {
+    const d = f.contentDocument;
+    await Promise.all(Array.from(d.images).filter(i => !i.complete).map(i => new Promise(r => { i.onload = i.onerror = r; })));
+    const done = () => { document.title = origTitle; setTimeout(() => f.remove(), 1000); };
+    f.contentWindow.addEventListener('afterprint', done, { once: true });
+    setTimeout(done, 60000);
+    f.contentWindow.focus();
+    f.contentWindow.print();
+  };
+}
+
+/* ---- Report builder: branded A4 document matching the original Daily Worksheet export ---- */
+async function buildReportHTML() {
+  const st = buildStateObject();
+  const F_ = id => st.fields[id] || '';
+  const job = currentJob || {};
+  const jobNo = F_('da_jobNo'), wsDate = F_('da_date'), region = st.region || '';
+  const genDate = new Date().toLocaleDateString('en-AU', { day:'numeric', month:'short', year:'numeric' });
+  const team = (st.team || []).filter(Boolean);
+  const logoCss = getComputedStyle(document.querySelector('.logo-hdr')).backgroundImage;
+  const logo = (logoCss.match(/url\("?(.*?)"?\)/) || [])[1] || '';
+
+  const card = (label, val) => `<div class="card"><div class="lbl">${esc(label)}</div><div class="val">${esc(val) || '&nbsp;'}</div></div>`;
+  const cards = pairs => `<div class="cards">${pairs.map(([l, v]) => card(l, v)).join('')}</div>`;
+  const band = t => `<div class="band">${esc(t)}</div>`;
+  const sub = t => `<div class="sub">${esc(t)}</div>`;
+  const lines = t => t ? `<div class="notes">${esc(t).split('\n').map(l => `<div>${l}</div>`).join('')}</div>` : '';
+  const sigCard = (name, src) => `<div class="sig"><div class="sig-n">${esc(name)}</div><div class="sig-b">${src ? `<img src="${src}">` : ''}</div></div>`;
+  const sigGrid = (scope, cls = 'sigs') => {
+    const items = team.map((n, i) => [n, st.sigs[`${scope}_${i}`]]).filter(([n]) => n);
+    return items.length ? `<div class="${cls}">${items.map(([n, s]) => sigCard(n, s)).join('')}</div>` : '<div class="muted">No signatures recorded.</div>';
+  };
+  const table = (heads, rows, cls = '') => rows.length ? `<table class="t ${cls}"><thead><tr>${heads.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>` : '<div class="muted">None recorded.</div>';
+  const header = `<thead><tr><td class="hd-cell"><div class="hd">
+      <div class="hd-l">${logo ? `<img class="hd-logo" src="${logo}" alt="Franmarine">` : '<b>FRANMARINE</b>'}<small>Underwater Services</small></div>
+      <div class="hd-r"><b>DAILY WORKSHEET</b><small>Job: ${esc(jobNo)} &nbsp; Date: ${esc(wsDate)}${region ? ' &nbsp; ' + esc(region) : ''}</small></div>
+    </div>
+    <div class="ft"><span>Franmarine Underwater Services Pty Ltd &nbsp;·&nbsp; ABN 81 059 653 459</span><span>Generated: ${esc(genDate)}</span><span>${currentWs?.locked ? '🔒 Signed off by ' + esc(currentWs.lockedBy || '') : 'Working copy'}</span></div>
+    </td></tr></thead>`;
+  const section = (inner, first = false) => `<table class="doc${first ? '' : ' brk'}">${header}<tbody><tr><td class="body">${inner}</td></tr></tbody></table>`;
+
+  const out = [];
+
+  // ---- 1. Project overview, notes, team, activity log
+  const activity = Array.from($$('#activityBody tr')).map(tr => ({
+    time: tr.querySelector('input[type=time]')?.value || '', desc: tr.querySelector('input[type=text]')?.value || ''
+  })).filter(r => r.time || r.desc).sort((a, b) => (a.time || '99').localeCompare(b.time || '99'));
+  out.push(section(
+    band('Project Overview') +
+    cards([['Project', F_('da_project')], ['Job No.', jobNo], ['Date', wsDate], ['Location', F_('da_location')], ['Vessel / Facility', F_('da_vessel')],
+           ['Client', F_('da_client')], ['Supervisor', F_('da_supervisor')], ['Client Contact', F_('da_contact')], ['Contact Number', F_('da_contactPh')]]) +
+    `<div class="cards c4">${[['Started Workshop', F_('da_startWorkshop')], ['Arrived Onsite', F_('da_arrivedOnsite')], ['Departed Site', F_('da_departedSite')], ['Region', region]].map(([l, v]) => card(l, v)).join('')}</div>` +
+    (F_('da_projDesc') ? sub('Day Notes') + lines(F_('da_projDesc')) : '') +
+    band('Team Roster') +
+    (team.length ? `<div class="chips">${team.map((n, i) => `<div class="chip">${i + 1}.&nbsp; ${esc(n)}</div>`).join('')}</div>` : '<div class="muted">No team recorded.</div>') +
+    band('Daily Activity Log') +
+    table(['Time', 'Activity / Description'], activity.map(r => [`<b class="tm">${esc(r.time)}</b>`, esc(r.desc)]), 'act'), true));
+
+  // ---- 2. Diving log
+  if (st.divingMode !== false) {
+    const hat = n => [F_('dv_hatModel' + n), F_('dv_hatSerial' + n)].filter(Boolean).join(' / ');
+    let dives = '';
+    for (let i = 0; i < NUM_DIVERS; i++) {
+      const name = F_(`diver_${i}_name`); const n = st.sub?.[i] || 1; const rows = [];
+      for (let j = 0; j < n; j++) {
+        const g = k => F_(`d${i}s${j}_${k}`);
+        if (!g('leftSurf') && !g('arrSurf') && !g('depth') && !g('totalDive')) continue;
+        rows.push([`Dive ${j + 1}`, g('si'), g('leftSurf'), g('leftBottom'), g('arrSurf'), g('depth'), g('totalDive'), g('totalBottom'), g('rf'), g('rg'), g('bailout')].map(esc));
+      }
+      if (!name && !rows.length) continue;
+      const col = DIVER_COLORS[i];
+      dives += `<div class="dvband" style="background:${col}">DIVER ${i + 1} &nbsp;—&nbsp; ${esc(name || '(unnamed)')}</div>` +
+        (rows.length ? `<table class="t dv" style="--c:${col}"><thead><tr><th>#</th><th>SI</th><th>L. Surface</th><th>L. Bottom</th><th>Arr. Surface</th><th>Depth (m)</th><th>Dive (min)</th><th>Btm (min)</th><th>RF</th><th>RG</th><th>Bail-out (bar)</th></tr></thead><tbody>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>` : '<div class="muted">No dives logged.</div>');
+    }
+    out.push(section(
+      band('Diving Log — Pre-Dive Checks') +
+      cards([['Comms Tested', F_('dv_commsTested')], ['CCTV Tested', F_('dv_cctvTested')], ['VHF', F_('dv_vhf')], ['Oxyviva', F_('dv_oxyviva')], ['Oxyviva Contents', F_('dv_oxyvivaContents')], ['First Aid Kit', F_('dv_firstAid')],
+             ['LP Air', F_('dv_lpAir')], ['HP Air', F_('dv_hpAir')], ['AED', F_('dv_aed')], ['Stretcher', F_('dv_stretcher')], ['Diver 1 Hat', hat(1)], ['Diver 2 Hat', hat(2)],
+             ['Diver 1 Hat-Check By', F_('dv_hatCheck1')], ['Diver 2 Hat-Check By', F_('dv_hatCheck2')]]) +
+      `<div class="cards c2">${card('Nearest Hyperbaric Chamber', F_('dv_chamber'))}${card('Chamber Phone', F_('dv_chamberPh'))}</div>` +
+      sub('Onsite Risk Assessment — Fit to Dive Signatures') + sigGrid('dl_fitToDive') +
+      band('Dive Log Entries') + (dives || '<div class="muted">No dives logged.</div>')));
+  }
+
+  // ---- 3. Toolbox meeting
+  const hazards = []; for (let i = 0; i < 8; i++) { const h = F_(`tb_hz_${i}_hazard`), c = F_(`tb_hz_${i}_control`), b = F_(`tb_hz_${i}_by`); if (h || c) hazards.push([esc(h), esc(c), esc(b)]); }
+  const checklist = TB_CHECKLIST.map((item, i) => { const v = F_(`tb_cl_${i}`); return [esc(item), `<b class="st ${v === 'Yes' ? 'ok' : v === 'No' ? 'bad' : ''}">${esc(v || '—')}</b>`]; });
+  out.push(section(
+    band('Toolbox Meeting') +
+    (F_('tb_scope') ? sub('Scope of Work') + lines(F_('tb_scope')) : '') +
+    sub('Requirements Checklist') + table(['Requirement', 'Status'], checklist, 'chk') +
+    sub('Hazard Identification & Controls') + table(['Hazard', 'Control Measure', 'By Whom'], hazards, 'hz') +
+    sub('Attendees — Sign On') + sigGrid('tb_signOn') +
+    sub('Authorisation') +
+    `<div class="sigs c2">${sigCard('Supervisor: ' + (F_('tb_supName') || F_('da_supervisor') || '—'), st.sigs.tb_supSig)}${sigCard('Diver Review: ' + (F_('tb_diverReviewName') || '—'), st.sigs.tb_diverSig)}</div>`));
+
+  // ---- 4. Emergency drill (only if anything recorded)
+  const steps = []; for (let i = 0; i < 15; i++) { const t = F_(`ed_step_${i}_time`), d = F_(`ed_step_${i}_desc`); if (t || d) steps.push([`<b class="tm">${esc(t)}</b>`, esc(d)]); }
+  const acts = []; for (let i = 0; i < 5; i++) { const c = F_(`ed_act_${i}_comment`), w = F_(`ed_act_${i}_who`), d = F_(`ed_act_${i}_when`); if (c || w) acts.push([esc(c), esc(w), esc(d)]); }
+  const drillSigs = team.some((n, i) => st.sigs[`ed_attendees_${i}`]);
+  if (F_('ed_type') || steps.length || acts.length || drillSigs) {
+    out.push(section(
+      band('Emergency Drill Report') +
+      `<div class="cards c2">${card('Drill Type', F_('ed_type'))}${card('Date', wsDate)}</div>` +
+      sub('Attendees — Sign On') + sigGrid('ed_attendees') +
+      sub('Drill Steps') + table(['Time', 'Step'], steps, 'act') +
+      sub('Comments / Action Plan') + table(['Comment', 'Who', 'When'], acts)));
+  }
+
+  // ---- 5. SWMS sign-off + attached SWMS pages
+  const swmsSigs = team.some((n, i) => st.sigs[`swms_signOff_${i}`]);
+  if (F_('swms_title') || swmsFile || swmsSigs) {
+    let pages = '';
+    if (swmsFile) {
+      if (swmsFile.pending) pages = `<div class="muted">SWMS PDF “${esc(swmsFile.name)}” is attached but not yet rendered for preview.</div>`;
+      else for (const ref of swmsFile.pages) { const src = await resolveRef(ref); pages += src ? `<div class="pg"><img src="${src}"></div>` : '<div class="muted">Page not available offline.</div>'; }
+    }
+    out.push(section(
+      band('SWMS Sign-Off') +
+      cards([['SWMS Title / Document No.', F_('swms_title')], ['Revision', F_('swms_rev')], ['Date of SWMS', F_('swms_date')]]) +
+      (F_('swms_highRisk') ? sub('Description of High Risk Work') + lines(F_('swms_highRisk')) : '') +
+      sub('Team Sign-Off') + '<div class="muted" style="margin-bottom:8px">I have read and understood this SWMS and agree to work in accordance with its controls.</div>' + sigGrid('swms_signOff') +
+      (swmsFile ? `<div class="fname">${esc(swmsFile.name)}</div>` + pages : '')));
+  }
+
+  // ---- 6. Permits
+  if (permitFiles.length) {
+    let docs = '';
+    for (const f of permitFiles) {
+      docs += `<div class="fname">${esc(f.name)}</div>`;
+      if (f.pending) { docs += `<div class="muted">PDF attached — not yet rendered for preview.</div>`; continue; }
+      for (const ref of f.pages) { const src = await resolveRef(ref); docs += src ? `<div class="pg"><img src="${src}"></div>` : '<div class="muted">Page not available offline.</div>'; }
+    }
+    out.push(section(
+      band('Permit Documents') +
+      cards([['Project', F_('da_project')], ['Job No.', jobNo], ['Date', wsDate], ['Location', F_('da_location')], ['Vessel / Facility', F_('da_vessel')], ['Supervisor', F_('da_supervisor')]]) + docs));
+  }
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(jobNo)} — Daily Worksheet ${esc(wsDate)}</title>
+<style>
+@page{size:A4;margin:0 0 10mm 0}
+*{box-sizing:border-box}
+body{margin:0;font:10.5pt/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;color:#1a2332;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+table.doc{width:100%;border-collapse:collapse}
+table.doc.brk{page-break-before:always;break-before:page}
+table.doc>thead{display:table-header-group}
+td.hd-cell{padding:0}
+.hd{background:#002060;color:#fff;height:68px;display:flex;justify-content:space-between;align-items:center;padding:0 14mm;border-bottom:6px solid #2e8bc0}
+.hd-l{display:flex;flex-direction:column;gap:3px}.hd-logo{height:28px;width:auto;display:block}
+.hd small{font-size:8.5pt;opacity:.85;display:block}
+.hd-r{text-align:right}.hd-r b{font-size:12pt;letter-spacing:.3px;display:block}
+.ft{background:#f4f6fa;border-bottom:1px solid #d7dde5;padding:4px 14mm;display:flex;justify-content:space-between;font-size:7.5pt;color:#6b7280}
+td.body{padding:8mm 14mm 6mm}
+.band{background:#002060;color:#fff;font-weight:700;font-size:10.5pt;letter-spacing:.5px;text-transform:uppercase;padding:8px 14px 8px 22px;margin:14px 0 8px;position:relative;break-after:avoid}
+.band::before{content:'';position:absolute;left:0;top:0;bottom:0;width:8px;background:#2e8bc0}
+.band:first-child{margin-top:0}
+.sub{background:#e8edf7;color:#002060;font-weight:700;font-size:10pt;padding:6px 12px 6px 18px;margin:12px 0 8px;border-left:5px solid #2e8bc0;break-after:avoid}
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:6px}
+.cards.c2{grid-template-columns:1fr 1fr}.cards.c4{grid-template-columns:repeat(4,1fr)}
+.card{border:1px solid #d7dde5;background:#f8f9fb;border-radius:3px;padding:6px 10px;break-inside:avoid}
+.lbl{font-size:7.5pt;color:#6b7280;text-transform:uppercase;letter-spacing:.3px}
+.val{font-weight:700;font-size:10pt;margin-top:2px;word-break:break-word}
+.notes{padding:4px 14px 2px;font-size:10pt}.notes div{min-height:1.3em}
+.chips{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.chip{background:#e8edf7;border-left:5px solid #2e8bc0;padding:6px 12px;font-size:10pt}
+table.t{width:100%;border-collapse:collapse;margin-bottom:6px;font-size:9.5pt}
+table.t th{background:#002060;color:#fff;text-align:left;padding:7px 10px;font-weight:700;font-size:9pt}
+table.t td{border:1px solid #d7dde5;padding:6px 10px;vertical-align:top}
+table.t tbody tr:nth-child(even) td{background:#f4f7fb}
+table.t thead{display:table-header-group}table.t tr{break-inside:avoid}
+table.act th:first-child,table.act td:first-child{width:90px;text-align:center}
+.tm{color:#002060}
+table.chk td:last-child{width:110px;text-align:center}
+.st.ok{color:#27ae60}.st.bad{color:#c0392b}
+table.hz td:first-child{width:22%}table.hz td:last-child{width:18%}
+.dvband{color:#fff;font-weight:700;padding:6px 14px;margin:10px 0 0;font-size:10pt;break-after:avoid}
+table.dv th{background:var(--c)}table.dv{margin-top:0}table.dv td{text-align:center}
+.sigs{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:6px}.sigs.c2{grid-template-columns:1fr 1fr}
+.sig{border:1px solid #d7dde5;background:#f8f9fb;border-radius:3px;padding:6px 8px;break-inside:avoid}
+.sig-n{font-weight:700;font-size:9pt;margin-bottom:4px;color:#1a2332}
+.sig-b{border:1px dashed #b4bcc9;background:#fff;height:58px;display:flex;align-items:center;justify-content:center}
+.sig-b img{max-height:54px;max-width:100%}
+.sigs.c2 .sig-b{height:70px}.sigs.c2 .sig-b img{max-height:66px}
+.muted{color:#6b7280;font-size:9.5pt;padding:4px 2px}
+.fname{font-weight:700;font-size:9.5pt;margin:12px 0 6px}
+.pg{break-before:page;padding-top:2mm}.pg img{width:100%;max-height:235mm;object-fit:contain;display:block;border:1px solid #e3e7ee}
+</style></head><body>${out.join('')}</body></html>`;
 }
 
 function hideEmptyForPrint() {
