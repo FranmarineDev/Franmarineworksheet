@@ -684,7 +684,7 @@ img{max-width:100%;height:auto}
       </div>
       <div class="login-err" id="jobErr"></div>
       <div class="flex mt" style="gap:8px;flex-wrap:wrap">
-        <button class="btn" data-act="saveJob">Save Job</button>
+        <button class="btn" data-act="saveJob" id="saveJobBtn">Save Job</button>
         <button class="btn ghost" data-act="cancelJob">Cancel</button>
         <button class="btn danger hidden" data-act="deleteJob" id="deleteJobBtn">Delete Job</button>
       </div>
@@ -3261,7 +3261,9 @@ function showJobForm(job) {
 }
 function hideJobForm() { $('#jobForm').classList.add('hidden'); }
 
+let savingJob = false;
 async function saveJob() {
+  if (savingJob) return;                                   // ignore repeat taps while a save is in flight
   const row = {};
   for (const k of ['job_no','project','region','client','location','vessel','start_date','supervisor','contact','contact_ph'])
     row[k] = $('#jf_' + k).value.trim() || null;
@@ -3269,10 +3271,19 @@ async function saveJob() {
   if (!row.job_no || !row.project) { $('#jobErr').textContent = 'Job No. and Project are required.'; return; }
   if (!online()) { $('#jobErr').textContent = 'You are offline — jobs can only be added when connected.'; return; }
   const id = $('#jf_id').value;
+  if (!id) {
+    const dup = Object.values(jobsById).find(j => j.status === 'active' && j.region === row.region && (j.job_no || '').trim().toLowerCase() === row.job_no.toLowerCase());
+    if (dup && !confirm(`There is already a running job ${dup.job_no} — ${dup.project}. Add another one with the same number anyway?`)) return;
+  }
+  const btn = $('#saveJobBtn');
+  savingJob = true; btn.disabled = true; btn.textContent = jobSwmsDirty && jobSwms ? 'Saving… uploading SWMS' : 'Saving…';
+  const done = () => { savingJob = false; btn.disabled = false; btn.textContent = 'Save Job'; };
   let res;
-  if (id) res = await sb.from('jobs').update({ ...row, updated_at: new Date().toISOString() }).eq('id', id);
-  else    res = await sb.from('jobs').insert({ ...row, created_by: me.id });
-  if (res.error) { $('#jobErr').textContent = res.error.message; return; }
+  try {
+    if (id) res = await sb.from('jobs').update({ ...row, updated_at: new Date().toISOString() }).eq('id', id);
+    else    res = await sb.from('jobs').insert({ ...row, created_by: me.id });
+  } catch (e) { res = { error: e }; }
+  if (res.error) { $('#jobErr').textContent = res.error.message; done(); return; }
   const supChanged = row.supervisor && row.supervisor !== ($('#jobForm').dataset.prevSupervisor || '');
   if (jobSwmsDirty) {
     try {
@@ -3287,6 +3298,7 @@ async function saveJob() {
       }
     } catch (e) { toast('SWMS upload failed: ' + e.message, 4000); }
   }
+  done();
   hideJobForm();
   await loadDashboard();
   toast(id ? '✓ Job updated' : '✓ Job added');
@@ -3357,6 +3369,10 @@ async function deleteJob() {
   if (!confirm('Delete this job? (Only jobs with no worksheets can be deleted.)')) return;
   const { error } = await sb.from('jobs').delete().eq('id', id);
   if (error) { $('#jobErr').textContent = error.message; return; }
+  try {   // tidy up the job's SWMS files
+    const { data: files } = await sb.storage.from(BUCKET).list(`job/${id}/swms`);
+    if (files?.length) await sb.storage.from(BUCKET).remove(files.map(f => `job/${id}/swms/${f.name}`));
+  } catch (e) { console.warn('job file cleanup failed', e); }
   hideJobForm(); await loadDashboard();
 }
 
