@@ -57,6 +57,18 @@ select * from diver_hours where ws_date >= '2026-11-01' order by diver, ws_date;
 ```
 `worksheets.summary` holds each day's compact figures; `worksheets.data` is the full sheet as JSON.
 
+## Emails (Edge Functions)
+Three functions send mail through `no-reply@franmarine.com.au` (secrets `SMTP_HOST/PORT/USER/PASS/FROM`, `APP_URL`):
+- `notify-incident` → the job region's managers + HSEQ (`HSEQ_TO`, default Belinda), incident PDF attached.
+- `send-drill-report` → `DRILL_TO` (default Belinda), cc region managers, drill PDF attached.
+- `send-closeout-report` → region managers (optional `CLOSEOUT_CC`), day close-out PDF attached. Sent from the **Close-Out** tab.
+
+## Day Close-Out, equipment, QR codes
+- **Close-Out** tab: auto summary of the day (times, dives, hours, issues, unsigned items) + progress / challenges / improvements / tomorrow, sent as PDF to the region managers.
+- **Equipment Used Onsite**: pick from the equipment list (managers maintain it in Options → Equipment; `equipment` table).
+- Pre-start QR codes are per region (`qr/nsw-*.png`, `qr/wa-*.png`) and are shown on the sheet for the job's region.
+- **Hours CSV** per job and **Import jobs** from a spreadsheet are in the dashboard (managers).
+
 ## Backups
 **Table Editor → worksheets → Export as CSV** for a quick manual backup, or the per-sheet *Save to JSON* in the app. Supabase's own point-in-time backups need a paid plan. Files are in Storage → `worksheet-files`.
 
