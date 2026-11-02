@@ -562,10 +562,11 @@ img{max-width:100%;height:auto}
       <button class="btn" type="submit" id="loginBtn">Sign in</button>
     </form>
     <form id="recoverForm" class="hidden">
-      <p class="muted" style="margin-bottom:12px">Choose a new password for your account.</p>
-      <label class="f"><span>New password</span><input type="password" id="newPass" autocomplete="new-password" minlength="8" required></label>
+      <p class="muted" style="margin-bottom:12px" id="recoverIntro">Choose a new password for your account.</p>
+      <label class="f"><span>New password</span><input type="password" id="newPass" autocomplete="new-password" minlength="8" required placeholder="At least 8 characters"></label>
+      <label class="f"><span>Confirm password</span><input type="password" id="newPass2" autocomplete="new-password" minlength="8" required></label>
       <div class="login-err" id="recoverErr"></div>
-      <button class="btn" type="submit">Set password &amp; sign in</button>
+      <button class="btn" type="submit" id="recoverBtn">Set password &amp; sign in</button>
     </form>
     <div class="login-foot">
       <button class="link" type="button" data-act="forgotPass">Forgot password?</button>
@@ -580,6 +581,7 @@ img{max-width:100%;height:auto}
     <div class="brand"><div class="logo-hdr" role="img" aria-label="Franmarine"></div><small>Jobs Dashboard</small></div>
     <span class="user-chip" id="userChip"></span>
     <button class="back-btn" data-act="refreshDash" title="Refresh">↻</button>
+    <button class="back-btn" data-act="changePassword" title="Change password">🔑</button>
     <button class="back-btn" data-act="signOut">Sign out</button>
   </header>
   <main class="dash">
@@ -671,6 +673,7 @@ img{max-width:100%;height:auto}
     <button class="opt-btn" data-act="toggleOpt">Options ▾</button>
     <div class="opt-menu" id="optMenu">
       <button data-act="exportPDF">📄 Export PDF</button>
+      <button data-act="changePassword">🔑 Change password</button>
       <button data-act="exportCSV">📊 Export Dive CSV</button>
       <button data-act="saveFile">💾 Save to JSON</button>
       <label class="edit-only">📂 Load JSON<input type="file" accept=".json" hidden data-act="loadFile"></label>
@@ -2891,6 +2894,7 @@ const ACT = {
   removeCrew:        el => removeCrew(el.dataset.id),
   showSummary:       el => showSummary(el.dataset.job),
   downloadPackage:   el => downloadPackage(el.dataset.job),
+  changePassword:    changePassword,
   archiveJob:        el => archiveJob(el.dataset.job),
   closeSummary:      () => $('#summaryPanel').classList.add('hidden')
 };
@@ -3006,6 +3010,7 @@ function setSync(state, msg) {
 }
 
 /* ---- Auth ---- */
+let needPassword = false;
 async function initAuth() {
   if (!configured()) { $('#setupNotice').classList.remove('hidden'); showView('login'); return; }
   if (!window.supabase) {
@@ -3013,15 +3018,33 @@ async function initAuth() {
     $('#loginBtn').disabled = true; showView('login'); return;
   }
   sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  // A reset-password or invitation link signs the person in via the URL hash; they must set a password before they go anywhere.
+  const linkType = (location.hash.match(/[#&]type=(recovery|invite|signup|magiclink)/) || [])[1];
+  needPassword = linkType === 'recovery' || linkType === 'invite' || linkType === 'signup';
   sb.auth.onAuthStateChange(async (event, session) => {
-    if (event === 'PASSWORD_RECOVERY') {
-      $('#loginForm').classList.add('hidden'); $('#recoverForm').classList.remove('hidden'); showView('login');
-      return;
-    }
-    if (event === 'SIGNED_OUT') { me = null; showView('login'); }
+    if (event === 'PASSWORD_RECOVERY') { needPassword = true; showSetPassword(); return; }
+    if (event === 'SIGNED_OUT') { me = null; needPassword = false; showView('login'); }
   });
   const { data: { session } } = await sb.auth.getSession();
+  if (session && needPassword) { showSetPassword(linkType === 'invite' || linkType === 'signup'); return; }
   if (session) await onSignedIn(session.user); else showView('login');
+}
+function showSetPassword(isInvite) {
+  $('#loginForm').classList.add('hidden'); $('#recoverForm').classList.remove('hidden');
+  $('#recoverIntro').textContent = isInvite ? 'Welcome to the Franmarine Daily Worksheet. Choose a password for your account to finish setting it up.' : 'Choose a new password for your account.';
+  $('#recoverErr').textContent = ''; $('#newPass').value = ''; $('#newPass2').value = '';
+  showView('login');
+  setTimeout(() => $('#newPass').focus(), 50);
+}
+/* Change password from inside the app (Options menu) */
+async function changePassword() {
+  const p1 = prompt('New password (at least 8 characters):'); if (p1 === null) return;
+  if (p1.length < 8) { alert('Password needs at least 8 characters.'); return; }
+  const p2 = prompt('Type it again to confirm:'); if (p2 === null) return;
+  if (p1 !== p2) { alert('The two passwords do not match — nothing changed.'); return; }
+  const { error } = await sb.auth.updateUser({ password: p1 });
+  if (error) { alert('Could not change password: ' + error.message); return; }
+  toast('🔑 Password changed', 2500);
 }
 
 async function onSignedIn(user) {
@@ -3060,10 +3083,15 @@ $('#loginForm').addEventListener('submit', async e => {
 
 $('#recoverForm').addEventListener('submit', async e => {
   e.preventDefault();
+  if ($('#newPass').value !== $('#newPass2').value) { $('#recoverErr').textContent = 'The two passwords do not match.'; return; }
+  const btn = $('#recoverBtn'); btn.disabled = true; $('#recoverErr').textContent = '';
   const { data, error } = await sb.auth.updateUser({ password: $('#newPass').value });
+  btn.disabled = false;
   if (error) { $('#recoverErr').textContent = error.message; return; }
+  needPassword = false;
   $('#recoverForm').classList.add('hidden'); $('#loginForm').classList.remove('hidden');
-  history.replaceState(null, '', location.pathname);
+  history.replaceState(null, '', location.pathname + location.search);
+  toast('🔑 Password set', 2500);
   await onSignedIn(data.user);
 });
 
