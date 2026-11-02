@@ -3030,7 +3030,17 @@ async function submitIncident(rec) {
     for (let i = 0; i < (photos || []).length; i++) {
       try { paths.push(await uploadRef(photos[i], `${rec.worksheet_id}/incident-${inc.id}/p${i + 1}.jpg`, 'image/jpeg')); } catch (e) { console.warn('photo upload failed', e); }
     }
-    if (paths.length) await sb.from('incidents').update({ photos: paths }).eq('id', inc.id);
+    let pdf_path = null;
+    try {
+      if (window.jspdf?.jsPDF) {
+        const job = jobsById[rec.job_id] || currentJob || {};
+        const blob = buildIncidentPDF(rec, job).output('blob');
+        pdf_path = `${rec.worksheet_id}/incident-${inc.id}/IncidentReport.pdf`;
+        const { error: pe } = await sb.storage.from(BUCKET).upload(pdf_path, blob, { contentType: 'application/pdf', upsert: true });
+        if (pe) { console.warn('incident pdf upload failed', pe); pdf_path = null; }
+      }
+    } catch (e) { console.warn('incident pdf failed', e); pdf_path = null; }
+    if (paths.length || pdf_path) await sb.from('incidents').update({ photos: paths, pdf_path }).eq('id', inc.id);
     const n = await notifyIncident(inc.id);
     return { ok: true, emailed: n };
   } catch (e) { return { ok: false, error: e.message || String(e) }; }
@@ -3119,92 +3129,128 @@ function drillData() {
   return { type: f('ed_type'), steps, acts, attendees, f, st };
 }
 
-/* A4 portrait PDF in the report style, built natively (crisp text, small file) */
-function buildDrillPDF() {
+/* Shared A4 report kit (crisp native PDF, house style). Used by the drill and incident reports. */
+function reportPDF(title, subtitleRight) {
   const { jsPDF } = window.jspdf;
-  const d = drillData(); const f = d.f; const job = currentJob || {};
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
-  const W = 210, M = 14, navy = [0, 32, 96], blue = [46, 139, 192], grey = [107, 114, 128], light = [232, 237, 247], border = [215, 221, 229];
+  const W = 210, M = 14, navy = [0, 32, 96], blue = [46, 139, 192], grey = [107, 114, 128], light = [232, 237, 247], border = [215, 221, 229], ink = [26, 35, 50];
   const logoCss = getComputedStyle(document.querySelector('.logo-hdr')).backgroundImage;
   const logo = (logoCss.match(/url\("?(.*?)"?\)/) || [])[1];
   const genDate = new Date().toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
-  let y;
-
-  const header = () => {
-    doc.setFillColor(...navy); doc.rect(0, 0, W, 22, 'F');
-    doc.setFillColor(...blue); doc.rect(0, 22, W, 1.6, 'F');
+  const K = { doc, W, M, y: 36 };
+  K.header = () => {
+    doc.setFillColor(...navy); doc.rect(0, 0, W, 22, 'F'); doc.setFillColor(...blue); doc.rect(0, 22, W, 1.6, 'F');
     if (logo) { try { doc.addImage(logo, 'PNG', M, 5, 36, 11.5); } catch (e) {} }
     doc.setTextColor(255); doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.text('Underwater Services', M, 20);
-    doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.text('EMERGENCY DRILL REPORT', W - M, 10, { align: 'right' });
-    doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5);
-    doc.text(`Job: ${job.job_no || ''}   Date: ${f('da_date')}   ${job.region || ''}`, W - M, 17, { align: 'right' });
-    doc.setFillColor(244, 246, 250); doc.rect(0, 23.6, W, 6, 'F');
-    doc.setTextColor(...grey); doc.setFontSize(7);
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.text(title.toUpperCase(), W - M, 10, { align: 'right' });
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.text(subtitleRight, W - M, 17, { align: 'right' });
+    doc.setFillColor(244, 246, 250); doc.rect(0, 23.6, W, 6, 'F'); doc.setTextColor(...grey); doc.setFontSize(7);
     doc.text('Franmarine Underwater Services Pty Ltd  ·  ABN 81 059 653 459', M, 27.6);
     doc.text(`Generated: ${genDate}`, W / 2, 27.6, { align: 'center' });
     doc.text(currentWs?.locked ? `Signed off by ${currentWs.lockedBy || ''}` : 'Working copy', W - M, 27.6, { align: 'right' });
-    y = 36;
+    K.y = 36;
   };
-  const ensure = h => { if (y + h > 285) { doc.addPage(); header(); } };
-  const band = t => { ensure(14); doc.setFillColor(...navy); doc.rect(M, y, W - 2 * M, 8, 'F'); doc.setFillColor(...blue); doc.rect(M, y, 2, 8, 'F');
-    doc.setTextColor(255); doc.setFont('helvetica', 'bold'); doc.setFontSize(9.5); doc.text(t.toUpperCase(), M + 5, y + 5.5); y += 11; };
-  const sub = t => { ensure(12); doc.setFillColor(...light); doc.rect(M, y, W - 2 * M, 6.5, 'F'); doc.setFillColor(...blue); doc.rect(M, y, 1.4, 6.5, 'F');
-    doc.setTextColor(...navy); doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.text(t, M + 4, y + 4.5); y += 9; };
-  const cards = (pairs, cols = 3) => {
+  K.ensure = h => { if (K.y + h > 285) { doc.addPage(); K.header(); } };
+  K.band = t => { K.ensure(14); doc.setFillColor(...navy); doc.rect(M, K.y, W - 2 * M, 8, 'F'); doc.setFillColor(...blue); doc.rect(M, K.y, 2, 8, 'F');
+    doc.setTextColor(255); doc.setFont('helvetica', 'bold'); doc.setFontSize(9.5); doc.text(t.toUpperCase(), M + 5, K.y + 5.5); K.y += 11; };
+  K.sub = t => { K.ensure(12); doc.setFillColor(...light); doc.rect(M, K.y, W - 2 * M, 6.5, 'F'); doc.setFillColor(...blue); doc.rect(M, K.y, 1.4, 6.5, 'F');
+    doc.setTextColor(...navy); doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.text(t, M + 4, K.y + 4.5); K.y += 9; };
+  K.cards = (pairs, cols = 3) => {
     const gw = (W - 2 * M - (cols - 1) * 2) / cols, gh = 12;
     for (let i = 0; i < pairs.length; i += cols) {
-      ensure(gh + 2);
-      pairs.slice(i, i + cols).forEach(([l, v], k) => {
+      K.ensure(gh + 2);
+      pairs.slice(i, i + cols).forEach(([l, v, colour], k) => {
         const x = M + k * (gw + 2);
-        doc.setFillColor(248, 249, 251); doc.setDrawColor(...border); doc.roundedRect(x, y, gw, gh, 0.8, 0.8, 'FD');
-        doc.setTextColor(...grey); doc.setFont('helvetica', 'normal'); doc.setFontSize(6.5); doc.text(l.toUpperCase(), x + 2.5, y + 3.8);
-        doc.setTextColor(26, 35, 50); doc.setFont('helvetica', 'bold'); doc.setFontSize(9);
-        doc.text(doc.splitTextToSize(String(v || '—'), gw - 5)[0] || '', x + 2.5, y + 8.8);
+        doc.setFillColor(248, 249, 251); doc.setDrawColor(...border); doc.roundedRect(x, K.y, gw, gh, 0.8, 0.8, 'FD');
+        if (colour) { doc.setFillColor(...colour); doc.rect(x, K.y, 1.4, gh, 'F'); }
+        doc.setTextColor(...grey); doc.setFont('helvetica', 'normal'); doc.setFontSize(6.5); doc.text(l.toUpperCase(), x + 2.5, K.y + 3.8);
+        doc.setTextColor(...ink); doc.setFont('helvetica', 'bold'); doc.setFontSize(9);
+        doc.text(doc.splitTextToSize(String(v || '—'), gw - 5)[0] || '', x + 2.5, K.y + 8.8);
       });
-      y += gh + 2;
+      K.y += gh + 2;
     }
-    y += 2;
+    K.y += 2;
   };
-  const sigs = list => {
+  K.para = (text, empty = 'None recorded.') => {
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5);
+    const lines = doc.splitTextToSize(text || empty, W - 2 * M - 6);
+    doc.setTextColor(...(text ? ink : grey));
+    for (const ln of lines) { K.ensure(6); doc.text(ln, M + 3, K.y + 4); K.y += 5; }
+    K.y += 4;
+  };
+  K.sigs = list => {
     const cols = 3, gw = (W - 2 * M - (cols - 1) * 3) / cols, gh = 24;
-    if (!list.length) { doc.setTextColor(...grey); doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.text('No attendees recorded.', M, y + 4); y += 10; return; }
+    if (!list.length) { K.para('', 'No attendees recorded.'); return; }
     for (let i = 0; i < list.length; i += cols) {
-      ensure(gh + 3);
+      K.ensure(gh + 3);
       list.slice(i, i + cols).forEach((a, k) => {
         const x = M + k * (gw + 3);
-        doc.setFillColor(248, 249, 251); doc.setDrawColor(...border); doc.roundedRect(x, y, gw, gh, 0.8, 0.8, 'FD');
-        doc.setTextColor(26, 35, 50); doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5); doc.text(a.name, x + 2.5, y + 4.5);
-        doc.setDrawColor(180, 188, 201); doc.setLineDashPattern([1, 1], 0); doc.rect(x + 2.5, y + 6.5, gw - 5, gh - 9); doc.setLineDashPattern([], 0);
-        if (a.sig) { try { doc.addImage(a.sig, 'PNG', x + 4, y + 7.5, Math.min(gw - 8, (gh - 11) * 2.6), gh - 11); } catch (e) {} }
+        doc.setFillColor(248, 249, 251); doc.setDrawColor(...border); doc.roundedRect(x, K.y, gw, gh, 0.8, 0.8, 'FD');
+        doc.setTextColor(...ink); doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5); doc.text(a.name, x + 2.5, K.y + 4.5);
+        doc.setDrawColor(180, 188, 201); doc.setLineDashPattern([1, 1], 0); doc.rect(x + 2.5, K.y + 6.5, gw - 5, gh - 9); doc.setLineDashPattern([], 0);
+        if (a.sig) { try { doc.addImage(a.sig, 'PNG', x + 4, K.y + 7.5, Math.min(gw - 8, (gh - 11) * 2.6), gh - 11); } catch (e) {} }
       });
-      y += gh + 3;
+      K.y += gh + 3;
     }
-    y += 2;
+    K.y += 2;
   };
-  const table = (head, body, widths) => {
-    if (!body.length) { doc.setTextColor(...grey); doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.text('None recorded.', M, y + 4); y += 10; return; }
-    doc.autoTable({ startY: y, margin: { left: M, right: M, top: 36 }, head: [head], body,
-      styles: { font: 'helvetica', fontSize: 8.5, cellPadding: 2.2, lineColor: border, lineWidth: 0.2, textColor: [26, 35, 50] },
+  K.table = (head, body, widths) => {
+    if (!body.length) { K.para(''); return; }
+    doc.autoTable({ startY: K.y, margin: { left: M, right: M, top: 36 }, head: [head], body,
+      styles: { font: 'helvetica', fontSize: 8.5, cellPadding: 2.2, lineColor: border, lineWidth: 0.2, textColor: ink },
       headStyles: { fillColor: navy, textColor: 255, fontStyle: 'bold' }, alternateRowStyles: { fillColor: [244, 247, 251] },
-      columnStyles: Object.fromEntries(widths.map((w, i) => [i, w ? { cellWidth: w } : {}])),
-      didDrawPage: data => { if (data.pageNumber > 1 || data.pageCount > 1) {} } });
-    y = doc.lastAutoTable.finalY + 6;
+      columnStyles: Object.fromEntries(widths.map((w, i) => [i, w ? { cellWidth: w } : {}])) });
+    K.y = doc.lastAutoTable.finalY + 6;
   };
+  K.photos = (dataUrls) => {
+    if (!dataUrls.length) return;
+    const cols = 2, gw = (W - 2 * M - 4) / cols, gh = 70;
+    for (let i = 0; i < dataUrls.length; i += cols) {
+      K.ensure(gh + 4);
+      dataUrls.slice(i, i + cols).forEach((src, k) => {
+        const x = M + k * (gw + 4);
+        doc.setDrawColor(...border); doc.rect(x, K.y, gw, gh);
+        try { const p = doc.getImageProperties(src); const sc = Math.min((gw - 2) / p.width, (gh - 2) / p.height); const w = p.width * sc, h = p.height * sc;
+              doc.addImage(src, p.fileType || 'JPEG', x + (gw - w) / 2, K.y + (gh - h) / 2, w, h); } catch (e) {}
+      });
+      K.y += gh + 4;
+    }
+  };
+  K.note = t => { K.ensure(10); doc.setTextColor(...grey); doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.text(doc.splitTextToSize(t, W - 2 * M), M, K.y + 4); K.y += 8; };
+  K.finish = () => { const n = doc.getNumberOfPages(); for (let i = 1; i <= n; i++) { doc.setPage(i); doc.setTextColor(...grey); doc.setFontSize(7); doc.text(`Page ${i} of ${n}`, W - M, 292, { align: 'right' }); } return doc; };
+  K.header();
+  return K;
+}
 
-  header();
-  band('Drill Details');
-  cards([['Drill type', d.type], ['Date', f('da_date')], ['Job No.', job.job_no], ['Project', f('da_project')], ['Location', f('da_location')], ['Vessel / Facility', f('da_vessel')],
-         ['Dive Supervisor', f('da_supervisor')], ['Client', f('da_client')], ['Region', job.region]]);
-  sub('Attendees — Sign On'); sigs(d.attendees);
-  sub('Drill Steps'); table(['Time', 'Step'], d.steps, [28, 0]);
-  sub('Comments / Action Plan'); table(['Comment', 'Who', 'When'], d.acts, [0, 45, 32]);
-  ensure(16);
-  doc.setTextColor(...grey); doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
-  doc.text(`Submitted by ${me?.name || ''} on ${new Date().toLocaleString('en-AU', { dateStyle: 'medium', timeStyle: 'short' })} from the Franmarine Daily Worksheet.`, M, y + 4);
-  // page numbers
-  const n = doc.getNumberOfPages();
-  for (let i = 1; i <= n; i++) { doc.setPage(i); doc.setTextColor(...grey); doc.setFontSize(7); doc.text(`Page ${i} of ${n}`, W - M, 292, { align: 'right' }); }
-  return doc;
+function buildDrillPDF() {
+  const d = drillData(); const f = d.f; const job = currentJob || {};
+  const K = reportPDF('Emergency Drill Report', `Job: ${job.job_no || ''}   Date: ${f('da_date')}   ${job.region || ''}`);
+  K.band('Drill Details');
+  K.cards([['Drill type', d.type], ['Date', f('da_date')], ['Job No.', job.job_no], ['Project', f('da_project')], ['Location', f('da_location')], ['Vessel / Facility', f('da_vessel')],
+           ['Dive Supervisor', f('da_supervisor')], ['Client', f('da_client')], ['Region', job.region]]);
+  K.sub('Attendees — Sign On'); K.sigs(d.attendees);
+  K.sub('Drill Steps'); K.table(['Time', 'Step'], d.steps, [28, 0]);
+  K.sub('Comments / Action Plan'); K.table(['Comment', 'Who', 'When'], d.acts, [0, 45, 32]);
+  K.note(`Submitted by ${me?.name || ''} on ${new Date().toLocaleString('en-AU', { dateStyle: 'medium', timeStyle: 'short' })} from the Franmarine Daily Worksheet.`);
+  return K.finish();
+}
+
+/* Incident PDF — rec is the form record (photos as data URLs), job the job row */
+function buildIncidentPDF(rec, job) {
+  const sevColour = rec.severity === 'High' ? [192, 57, 43] : rec.severity === 'Medium' ? [230, 126, 34] : [107, 114, 128];
+  const K = reportPDF('Incident / Near-Miss Report', `Job: ${job.job_no || ''}   Date: ${rec.ws_date}   ${job.region || ''}`);
+  K.band('Incident Details');
+  K.cards([['Type', rec.type, sevColour], ['Severity', rec.severity, sevColour], ['Time of incident', rec.occurred_at || '—'],
+           ['Job No.', job.job_no], ['Project', job.project], ['Site', job.location],
+           ['Where exactly', rec.location], ['Reported by', rec.reported_by_name], ['Region', job.region]]);
+  K.sub('People involved'); K.para(rec.people, 'None recorded.');
+  K.sub('What happened'); K.para(rec.description);
+  K.sub('Immediate actions taken'); K.para(rec.actions);
+  K.cards([['Injury', rec.injury || '—'], ['Work stopped', rec.work_stopped || '—']], 2);
+  if ((rec.photos || []).length) { K.sub(`Photos (${rec.photos.length})`); K.photos(rec.photos); }
+  K.note(`Reported by ${rec.reported_by_name || ''} on ${new Date().toLocaleString('en-AU', { dateStyle: 'medium', timeStyle: 'short' })} from the Franmarine Daily Worksheet. ` +
+         `Sent automatically to the ${job.region || ''} managers.`);
+  return K.finish();
 }
 
 async function sendDrillReport() {

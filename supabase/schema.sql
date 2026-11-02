@@ -193,8 +193,10 @@ create table if not exists public.incidents (
   email_error          text,
   emailed_to           text[],
   emailed_at           timestamptz,
+  pdf_path             text,                                    -- storage path of the generated PDF
   created_at           timestamptz not null default now()
 );
+alter table public.incidents add column if not exists pdf_path text;
 create index if not exists incidents_job_idx on public.incidents (job_id, created_at desc);
 alter table public.incidents enable row level security;
 drop policy if exists "incidents: read"          on public.incidents;

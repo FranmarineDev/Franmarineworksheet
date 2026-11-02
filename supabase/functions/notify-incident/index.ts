@@ -67,13 +67,20 @@ Deno.serve(async (req) => {
       ${row("Immediate actions", inc.actions)}
       ${row("Injury", inc.injury)}
       ${row("Work stopped", inc.work_stopped)}
-      ${row("Photos", (inc.photos ?? []).length ? `${inc.photos.length} attached — open the worksheet to view` : "")}
+      ${row("Photos", (inc.photos ?? []).length ? `${inc.photos.length} — see attached PDF` : "")}
     </table>
     ${appUrl ? `<p style="margin-top:18px"><a href="${appUrl}" style="background:#002060;color:#fff;text-decoration:none;padding:10px 16px;border-radius:6px;font-weight:600">Open the Daily Worksheet</a></p>` : ""}
     <p style="color:#6b7280;font-size:12px;margin-top:18px">Please acknowledge the incident on the dashboard once you have followed up. This email was sent automatically to the ${esc(region)} managers.</p>
   </div>
 </div>`;
     const text = `${sev.toUpperCase()} — ${inc.type}\n${inc.jobs?.job_no} ${inc.jobs?.project} — ${date}\n\nReported by: ${inc.reported_by_name}\nPeople: ${inc.people ?? ""}\nWhere: ${inc.location ?? ""}\n\nWhat happened:\n${inc.description}\n\nImmediate actions:\n${inc.actions ?? ""}\n\nInjury: ${inc.injury ?? ""}   Work stopped: ${inc.work_stopped ?? ""}\n\n${appUrl}`;
+
+    // Attach the PDF the app generated, if it is there
+    const attachments: { filename: string; content: Uint8Array; contentType: string }[] = [];
+    if (inc.pdf_path) {
+      const { data: file } = await admin.storage.from("worksheet-files").download(inc.pdf_path);
+      if (file) attachments.push({ filename: `${inc.jobs?.job_no}_${inc.ws_date}_Incident.pdf`.replace(/\s+/g, "_"), content: new Uint8Array(await file.arrayBuffer()), contentType: "application/pdf" });
+    }
 
     const transporter = nodemailer.createTransport({
       host: Deno.env.get("SMTP_HOST") ?? "smtp.office365.com",
@@ -83,7 +90,7 @@ Deno.serve(async (req) => {
       auth: { user: Deno.env.get("SMTP_USER"), pass: Deno.env.get("SMTP_PASS") },
     });
     try {
-      await transporter.sendMail({ from: Deno.env.get("SMTP_FROM") ?? `"Franmarine Worksheet" <${Deno.env.get("SMTP_USER")}>`, to, subject, text, html, priority: sev === "High" ? "high" : "normal" });
+      await transporter.sendMail({ from: Deno.env.get("SMTP_FROM") ?? `"Franmarine Worksheet" <${Deno.env.get("SMTP_USER")}>`, to, subject, text, html, attachments, priority: sev === "High" ? "high" : "normal" });
       await admin.from("incidents").update({ email_status: "sent", emailed_to: to, emailed_at: new Date().toISOString(), email_error: null }).eq("id", incident_id);
       return json({ sent_to: to });
     } catch (e) {
