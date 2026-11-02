@@ -145,9 +145,15 @@ img.pending{min-height:80px;background:repeating-linear-gradient(45deg,#f4f6fa,#
 .btn.send:disabled{opacity:.6;cursor:wait}
 
 /* QR codes, equipment, dive permit, close-out */
-.qr-row{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:12px}
-.qr-fig{margin:0;text-align:center;font-size:11px;color:var(--muted);width:120px}
-.qr-fig img{width:120px;height:120px;border:1px solid var(--border);border-radius:6px;background:#fff;object-fit:contain}
+.qr-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:12px}
+.qr-fig{margin:0;text-align:center;font-size:12px;color:var(--muted)}
+.qr-fig img{width:100%;max-width:300px;aspect-ratio:1;border:1px solid var(--border);border-radius:8px;background:#fff;cursor:zoom-in;display:block;margin:0 auto 6px}
+.qr-fig a{display:inline-block;margin-top:4px;font-size:12px}
+.qr-zoom{position:fixed;inset:0;background:#fff;z-index:1000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:16px;cursor:zoom-out}
+.qr-zoom img{width:min(92vw,92vh);height:auto;image-rendering:pixelated}
+.qr-zoom .qr-zoom-title{font-weight:700;font-size:18px;color:#1a2332;text-align:center}
+.qr-zoom .muted{font-size:13px}
+@media print{.qr-fig img{max-width:160px;cursor:default}.qr-zoom,.qr-fig a{display:none}}
 .equip-row{display:grid;grid-template-columns:1fr 1fr 44px;gap:8px;margin-bottom:6px;align-items:center}
 .diver-checks{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:0 0 10px;padding:8px 10px;background:var(--bg);border-radius:6px}
 .diver-checks label.f>span{font-size:10px}
@@ -1181,8 +1187,11 @@ const DP_ISO_ROWS = ['Sea suctions and discharges', 'Emergency fire pumps', 'Sha
 const PAY_TIMES = [['da_startWorkshop', 'Start Day'], ['da_departedWorkshop', 'Departed Workshop'], ['da_arrivedOnsite', 'Arrived Onsite'], ['da_jobCompleted', 'Job Completed'],
   ['da_departedSite', 'Departed Site'], ['da_arrivedWorkshop', 'Arrived Workshop'], ['da_finishDay', 'Finished Day']];
 const QR_PRESTART = {
-  NSW: [{ name: 'Bandmask 28 — pre-dive checks', src: 'qr/nsw-bandmask-28.png' }, { name: 'KM 37 — pre-dive checks', src: 'qr/nsw-km-37.png' }],
-  WA:  [{ name: 'KMB 18 / 28 — pre-dive checks', src: 'qr/wa-kmb-18-28.png' }, { name: 'KM 27 / 37 — pre-dive checks', src: 'qr/wa-km-27-37.png' }, { name: 'Aga — pre-dive checks', src: 'qr/wa-aga.png' }]
+  NSW: [{ name: 'Bandmask 28 — pre-dive checks', src: 'qr/nsw-bandmask-28.png', url: 'https://forms.office.com/Pages/ResponsePage.aspx?id=qTWX2sPegUK6All1IFFEmUOL3hT_enpKooYyefKhH8JUQ0VBV0dRQlJZWDBDRkFNMThYQzNEQzhVUi4u&origin=QRCode' },
+        { name: 'KM 37 — pre-dive checks', src: 'qr/nsw-km-37.png', url: 'https://forms.office.com/Pages/ResponsePage.aspx?id=qTWX2sPegUK6All1IFFEmUOL3hT_enpKooYyefKhH8JUQUg1TDRYS0tFTzY0TVpBVllaTUwzUUExVS4u&origin=QRCode' }],
+  WA:  [{ name: 'KMB 18 / 28 — pre-dive checks', src: 'qr/wa-kmb-18-28.png', url: 'https://forms.office.com/Pages/ResponsePage.aspx?id=qTWX2sPegUK6All1IFFEmepIPNrkprlEuJGRQ7OqaN5UNUtPNjIzTDhJMDg2MDBQSDFNVzVQNEg1My4u&origin=QRCode' },
+        { name: 'KM 27 / 37 — pre-dive checks', src: 'qr/wa-km-27-37.png', url: 'https://forms.office.com/Pages/ResponsePage.aspx?id=qTWX2sPegUK6All1IFFEmepIPNrkprlEuJGRQ7OqaN5UNUJLVFFUT0NHMFJOT0dERlJWTE5aRk9TUy4u&origin=QRCode' },
+        { name: 'Aga — pre-dive checks', src: 'qr/wa-aga.png', url: 'https://forms.office.com/Pages/ResponsePage.aspx?id=qTWX2sPegUK6All1IFFEmepIPNrkprlEuJGRQ7OqaN5UODFBTjQ5VVpZQ1JLNDk0N0hXUVM0SVFRQy4u&origin=QRCode' }]
 };
 const dpSignBlock = (id, label) => `<div>
     <div class="g2">${F(id + 'Name', 'Name')}${F(id + 'Time', 'Time', { type:'time' })}</div>
@@ -1507,9 +1516,16 @@ function renderEquipDatalist() {
 }
 function renderQR() {
   const c = $('#qrRow'); if (!c) return;
-  const list = QR_PRESTART[currentJob?.region || currentRegion()] || [];
-  c.innerHTML = list.length ? `<div class="qr-row">${list.map(q => `<figure class="qr-fig"><img src="${q.src}" alt="${esc(q.name)}" loading="lazy"><figcaption>${esc(q.name)}</figcaption></figure>`).join('')}</div>
-    <div class="muted mb">Scan for the helmet pre-start procedure, then complete the checks below and per diver.</div>` : '';
+  const region = currentJob?.region || currentRegion();
+  const list = QR_PRESTART[region] || [];
+  c.innerHTML = list.length ? `<div class="qr-row">${list.map((q, i) => `<figure class="qr-fig"><img src="${q.src}" alt="${esc(q.name)}" onclick="zoomQR('${region}',${i})"><figcaption><b>${esc(q.name)}</b><br><a href="${q.url}" target="_blank" rel="noopener">Open form on this phone</a></figcaption></figure>`).join('')}</div>
+    <div class="muted mb">Tap a code to show it full screen for the divers to scan, or open the form directly. Then complete the checks below and per diver.</div>` : '';
+}
+function zoomQR(region, i) {
+  const q = (QR_PRESTART[region] || [])[i]; if (!q) return;
+  const d = document.createElement('div'); d.className = 'qr-zoom';
+  d.innerHTML = `<div class="qr-zoom-title">${esc(q.name)}</div><img src="${q.src}" alt="${esc(q.name)}"><div class="muted">Tap anywhere to close</div>`;
+  d.onclick = () => d.remove(); document.body.appendChild(d);
 }
 
 /* Supervisor goes on the roster automatically (appended so existing signatures keep their slots) */
