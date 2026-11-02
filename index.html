@@ -258,6 +258,10 @@ main{padding:18px 22px 120px;max-width:1160px;width:100%;margin:0 auto;min-width
    ================================================================= */
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .g3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.crew-pick{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.crew-pick label{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:16px;padding:4px 10px 4px 8px;font-size:13px;cursor:pointer;background:#fff}
+.crew-pick label:has(input:checked){background:#e8edf7;border-color:#2e8bc0}
+.crew-pick input{width:auto;min-height:0;margin:0}
 .g4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
 label.f{display:flex;flex-direction:column;gap:3px}
 label.f>span{font-size:11px;color:var(--muted);text-transform:uppercase;
@@ -665,6 +669,10 @@ img{max-width:100%;height:auto}
         <label class="f"><span>Supervisor</span><input id="jf_supervisor" list="supervisorList" placeholder="Pick a user account" autocomplete="off"></label>
         <label class="f"><span>Client Contact</span><input id="jf_contact"></label>
         <label class="f"><span>Contact Number</span><input id="jf_contact_ph" type="tel"></label>
+      </div>
+      <div class="f mt" style="display:block">
+        <span>Crew on this job <span class="muted" style="text-transform:none;font-weight:400">— tick who's rostered; they're pre-filled as the team on the first day's worksheet (the supervisor can still change it on the day)</span></span>
+        <div class="crew-pick" id="jobCrewPick"></div>
       </div>
       <div class="f mt" style="display:block">
         <span>SWMS for this job (PDF) <span class="muted" style="text-transform:none;font-weight:400">— goes onto the first day's worksheet automatically, and the supervisor gets it in their assignment email</span></span>
@@ -3220,7 +3228,7 @@ function renderJobs() {
         ${mgr ? `<button class="link" data-act="editJob" data-job="${j.id}">Edit</button>` : ''}
       </div>
       <div class="card-title">${esc(j.project)}</div>
-      <div class="card-meta">${meta || '<i>No client / location set</i>'}${j.supervisor ? `<br>Supervisor: <b>${esc(j.supervisor)}</b>` : ''}${j.start_date ? `${j.supervisor ? ' · ' : '<br>'}Starts ${fmtDate(j.start_date)}` : ''}${j.swms?.name ? `<br>📄 SWMS: ${esc(j.swms.name)}` : ''}</div>
+      <div class="card-meta">${meta || '<i>No client / location set</i>'}${j.supervisor ? `<br>Supervisor: <b>${esc(j.supervisor)}</b>` : ''}${j.start_date ? `${j.supervisor ? ' · ' : '<br>'}Starts ${fmtDate(j.start_date)}` : ''}${j.swms?.name ? `<br>📄 SWMS: ${esc(j.swms.name)}` : ''}${(j.crew || []).length ? `<br>Crew: ${j.crew.map(esc).join(', ')}` : ''}</div>
       <div class="card-meta">${ws.length} worksheet${ws.length === 1 ? '' : 's'} · ${last}</div>
       <div class="ws-list">${chips}${more}</div>
       <div class="card-actions">
@@ -3234,7 +3242,7 @@ function renderJobs() {
   }).join('');
 }
 $('#showDone').addEventListener('change', renderJobs);
-$('#jf_region').addEventListener('change', fillSupervisorList);
+$('#jf_region').addEventListener('change', () => { fillSupervisorList(); paintJobCrewPick(pickedJobCrew()); });
 
 function showJobForm(job) {
   $('#jobForm').classList.remove('hidden');
@@ -3244,6 +3252,7 @@ function showJobForm(job) {
     $('#jf_' + k).value = job?.[k] ?? (k === 'region' ? me.region : '');
   $('#jobForm').dataset.prevSupervisor = job?.supervisor || '';
   jobSwms = job?.swms ? normaliseEntry(job.swms, 'swms') : null; jobSwmsDirty = false; paintJobSwms();
+  paintJobCrewPick(job?.crew || []);
   fillSupervisorList();
   $('#jobErr').textContent = '';
   $('#deleteJobBtn').classList.toggle('hidden', !job || (job.worksheets || []).length > 0);
@@ -3256,6 +3265,7 @@ async function saveJob() {
   const row = {};
   for (const k of ['job_no','project','region','client','location','vessel','start_date','supervisor','contact','contact_ph'])
     row[k] = $('#jf_' + k).value.trim() || null;
+  row.crew = pickedJobCrew();
   if (!row.job_no || !row.project) { $('#jobErr').textContent = 'Job No. and Project are required.'; return; }
   if (!online()) { $('#jobErr').textContent = 'You are offline — jobs can only be added when connected.'; return; }
   const id = $('#jf_id').value;
@@ -3296,6 +3306,17 @@ async function notifyJobAssigned(jobId, name) {
     toast(`✉ ${name} emailed about this job`, 2500);
   } catch (e) { toast('Supervisor email not sent: ' + e.message, 4000); }
 }
+/* Crew picker on the job form — active crew in the job's region, plus any names already on the job */
+function paintJobCrewPick(selected) {
+  const region = $('#jf_region').value || me.region;
+  const names = crewList.filter(c => c.active !== false && (c.region || 'NSW') === region).map(c => c.name);
+  for (const n of selected) if (!names.includes(n)) names.push(n);
+  $('#jobCrewPick').innerHTML = names.sort((a, b) => a.localeCompare(b)).map(n =>
+    `<label><input type="checkbox" value="${esc(n)}" ${selected.includes(n) ? 'checked' : ''}>${esc(n)}</label>`).join('')
+    || '<span class="muted">No crew in the crew list yet — add them under 👥 Crew.</span>';
+}
+const pickedJobCrew = () => [...$('#jobCrewPick').querySelectorAll('input:checked')].map(i => i.value);
+
 /* SWMS attached to the job itself (jobs.swms — same entry shape as a worksheet's SWMS). Files live at
  * job/<job id>/swms/... in Storage. New jobs upload after the insert, once the id exists. */
 let jobSwms = null;            // entry currently shown in the job form
@@ -3440,6 +3461,7 @@ async function openTodayWorksheet(jobId) {
       copiedFrom = prev.ws_date;
     } catch (e) { console.warn('copy-yesterday failed', e); }
   }
+  if (!init.team.length && Array.isArray(job.crew) && job.crew.length) init.team = job.crew.slice();
   if (!init.swms && job.swms) { init.swms = normaliseEntry(job.swms, 'swms'); if (!init.fields.swms_title) init.fields.swms_title = (job.swms.name || '').replace(/\.pdf$/i, ''); }
   const { data, error } = await sb.from('worksheets')
     .insert({ job_id: jobId, ws_date: today, supervisor: init.fields.da_supervisor || null,

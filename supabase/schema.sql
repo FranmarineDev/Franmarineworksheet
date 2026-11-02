@@ -108,7 +108,8 @@ alter table public.jobs add column if not exists archived_at timestamptz;
 alter table public.jobs add column if not exists start_date date;                    -- planned first day on site
 alter table public.jobs add column if not exists supervisor_notified_at timestamptz; -- notify-job-assigned function
 alter table public.jobs add column if not exists supervisor_notified_to text;
-alter table public.jobs add column if not exists swms jsonb;                         -- SWMS attached to the job (same shape as a worksheet's); files at job/<id>/swms/
+alter table public.jobs add column if not exists swms jsonb;
+alter table public.jobs add column if not exists crew text[] not null default '{}';   -- names rostered on the job (pre-fills day 1's team)                         -- SWMS attached to the job (same shape as a worksheet's); files at job/<id>/swms/
 
 -- ---------- Worksheets (one per job per day; the whole form lives in `data`) ----------
 create table if not exists public.worksheets (
