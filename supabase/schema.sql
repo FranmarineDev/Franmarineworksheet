@@ -207,6 +207,32 @@ create policy "incidents: managers edit" on public.incidents for update to authe
   using (public.can_see_job(job_id) and (public.is_manager() or reported_by = auth.uid()))
   with check (public.can_see_job(job_id));
 
+-- ---------- Emergency drill reports emailed to HSEQ (send-drill-report function) ----------
+create table if not exists public.drill_reports (
+  id            uuid primary key default gen_random_uuid(),
+  worksheet_id  uuid references public.worksheets (id) on delete set null,
+  job_id        uuid not null references public.jobs (id) on delete cascade,
+  ws_date       date not null,
+  drill_type    text,
+  pdf_path      text not null,            -- storage path of the generated PDF
+  file_name     text,
+  attendees     text[],
+  steps         integer,
+  sent_by       uuid references public.profiles (id),
+  sent_by_name  text,
+  email_status  text not null default 'pending' check (email_status in ('pending', 'sent', 'failed')),
+  email_error   text,
+  emailed_to    text[],
+  emailed_cc    text[],
+  emailed_at    timestamptz,
+  created_at    timestamptz not null default now()
+);
+alter table public.drill_reports enable row level security;
+drop policy if exists "drill_reports: read"   on public.drill_reports;
+drop policy if exists "drill_reports: insert" on public.drill_reports;
+create policy "drill_reports: read"   on public.drill_reports for select to authenticated using (public.can_see_job(job_id));
+create policy "drill_reports: insert" on public.drill_reports for insert to authenticated with check (public.can_see_job(job_id));
+
 -- ---------- Storage bucket for SWMS / permit files ----------
 insert into storage.buckets (id, name, public, file_size_limit)
 values ('worksheet-files', 'worksheet-files', false, 26214400)      -- 25 MB per file
