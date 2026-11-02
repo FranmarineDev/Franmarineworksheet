@@ -1,7 +1,7 @@
 /* Franmarine Daily Worksheet — service worker
  * Caches the app shell + the two CDN libraries so the app opens with no signal.
  * Bump CACHE whenever index.html changes so devices pick up the new version. */
-const CACHE = 'franmarine-ws-v15';
+const CACHE = 'franmarine-ws-v16';
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png',
   'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',

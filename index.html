@@ -145,6 +145,12 @@ img.pending{min-height:80px;background:repeating-linear-gradient(45deg,#f4f6fa,#
 .btn.send:disabled{opacity:.6;cursor:wait}
 
 /* QR codes, equipment, dive permit, close-out */
+.sm-title{font-weight:700;font-size:15px;color:var(--navy,#002060);margin-bottom:8px}.sm-title small{display:block;font-weight:400;font-size:12px;color:var(--muted)}
+.sm-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:6px;margin-bottom:6px}
+.sm-card{border:1px solid var(--border);background:var(--panel,#f8f9fb);border-radius:6px;padding:6px 10px;min-width:0}
+.sm-lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px}.sm-val{font-weight:600;font-size:13px;margin-top:2px;word-break:break-word}
+.sm-head{background:#e8edf7;color:#002060;font-weight:700;font-size:12px;padding:5px 10px;border-left:4px solid #2e8bc0;margin:10px 0 4px;border-radius:0 4px 4px 0}
+.sm-para{font-size:13px;padding:2px 10px;white-space:pre-wrap}
 .qr-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:12px}
 .qr-fig{margin:0;text-align:center;font-size:12px;color:var(--muted)}
 .qr-fig img{width:100%;max-width:300px;aspect-ratio:1;border:1px solid var(--border);border-radius:8px;background:#fff;cursor:zoom-in;display:block;margin:0 auto 6px}
@@ -163,7 +169,7 @@ img.pending{min-height:80px;background:repeating-linear-gradient(45deg,#f4f6fa,#
 .dp-sign{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
 .dp-sign .sig-row{grid-template-columns:1fr auto}
 .siren{background:#fdecea;border:1px solid #f5b7b1;color:#7b1e1e;padding:8px 12px;border-radius:6px;font-size:13px;margin-bottom:10px}
-.summary-box{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-size:13px;white-space:pre-wrap;font-family:ui-monospace,Menlo,monospace;max-height:260px;overflow:auto}
+.summary-box{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-size:13px;max-height:420px;overflow:auto}
 .issues{background:#fff8e6;border:1px solid #f0d58a;border-radius:6px;padding:8px 12px;font-size:13px;margin-top:8px}
 .ws-chip .miss{display:inline-block;background:var(--warn);color:#fff;font-size:10px;border-radius:8px;padding:0 5px;margin-left:4px}
 @media(max-width:600px){ .diver-checks{grid-template-columns:repeat(2,1fr)} .dp-sign{grid-template-columns:1fr} .equip-row{grid-template-columns:1fr 1fr 40px} }
@@ -2394,10 +2400,11 @@ async function exportPDF() {
 }
 
 /* ---- Report builder: branded A4 document matching the original Daily Worksheet export ---- */
-async function buildReportHTML() {
-  const st = buildStateObject();
+async function buildReportHTML(ctx = {}) {
+  const st = ctx.st || buildStateObject();
   const F_ = id => st.fields[id] || '';
-  const job = currentJob || {};
+  const job = ctx.job || currentJob || {}; const ws = ctx.ws || currentWs; const incs = ctx.incidents || incidents;
+  const swmsF = st.swms || null; const permitF = st.permits || [];
   const jobNo = F_('da_jobNo'), wsDate = F_('da_date'), region = st.region || '';
   const genDate = new Date().toLocaleDateString('en-AU', { day:'numeric', month:'short', year:'numeric' });
   const team = (st.team || []).filter(Boolean);
@@ -2420,16 +2427,14 @@ async function buildReportHTML() {
       <div class="hd-l">${logo ? `<img class="hd-logo" src="${logo}" alt="Franmarine">` : '<b>FRANMARINE</b>'}<small>Underwater Services</small></div>
       <div class="hd-r"><b>DAILY WORKSHEET</b><small>Job: ${esc(jobNo)} &nbsp; Date: ${esc(wsDate)}${region ? ' &nbsp; ' + esc(region) : ''}</small></div>
     </div>
-    <div class="ft"><span>Franmarine Underwater Services Pty Ltd &nbsp;·&nbsp; ABN 81 059 653 459</span><span>Generated: ${esc(genDate)}</span><span>${currentWs?.locked ? '🔒 Signed off by ' + esc(currentWs.lockedBy || '') : 'Working copy'}</span></div>
+    <div class="ft"><span>Franmarine Underwater Services Pty Ltd &nbsp;·&nbsp; ABN 81 059 653 459</span><span>Generated: ${esc(genDate)}</span><span>${ws?.locked ? '🔒 Signed off by ' + esc(ws.locked_by_name || ws.lockedBy || '') : 'Working copy'}</span></div>
     </td></tr></thead>`;
   const section = (inner, first = false) => `<table class="doc${first ? '' : ' brk'}">${header}<tbody><tr><td class="body">${inner}</td></tr></tbody></table>`;
 
   const out = [];
 
   // ---- 1. Project overview, notes, team, activity log
-  const activity = Array.from($$('#activityBody tr')).map(tr => ({
-    time: tr.querySelector('input[type=time]')?.value || '', desc: tr.querySelector('input[type=text]')?.value || ''
-  })).filter(r => r.time || r.desc).sort((a, b) => (a.time || '99').localeCompare(b.time || '99'));
+  const activity = activityFromState(st);
   out.push(section(
     band('Project Overview') +
     cards([['Project', F_('da_project')], ['Job No.', jobNo], ['Date', wsDate], ['Location', F_('da_location')], ['Vessel / Facility', F_('da_vessel')],
@@ -2497,24 +2502,24 @@ async function buildReportHTML() {
 
   // ---- 5. SWMS sign-off + attached SWMS pages
   const swmsSigs = team.some((n, i) => st.sigs[`swms_signOff_${i}`]);
-  if (F_('swms_title') || swmsFile || swmsSigs) {
+  if (F_('swms_title') || swmsF || swmsSigs) {
     let pages = '';
-    if (swmsFile) {
-      if (swmsFile.pending) pages = `<div class="muted">SWMS PDF “${esc(swmsFile.name)}” is attached but not yet rendered for preview.</div>`;
-      else for (const ref of swmsFile.pages) { const src = await resolveRef(ref); pages += src ? `<div class="pg"><img src="${src}"></div>` : '<div class="muted">Page not available offline.</div>'; }
+    if (swmsF) {
+      if (swmsF.pending) pages = `<div class="muted">SWMS PDF “${esc(swmsF.name)}” is attached but not yet rendered for preview.</div>`;
+      else for (const ref of swmsF.pages) { const src = await resolveRef(ref); pages += src ? `<div class="pg"><img src="${src}"></div>` : '<div class="muted">Page not available offline.</div>'; }
     }
     out.push(section(
       band('SWMS Sign-Off') +
       cards([['SWMS Title / Document No.', F_('swms_title')], ['Revision', F_('swms_rev')], ['Date of SWMS', F_('swms_date')]]) +
       (F_('swms_highRisk') ? sub('Description of High Risk Work') + lines(F_('swms_highRisk')) : '') +
       sub('Team Sign-Off') + '<div class="muted" style="margin-bottom:8px">I have read and understood this SWMS and agree to work in accordance with its controls.</div>' + sigGrid('swms_signOff') +
-      (swmsFile ? `<div class="fname">${esc(swmsFile.name)}</div>` + pages : '')));
+      (swmsF ? `<div class="fname">${esc(swmsF.name)}</div>` + pages : '')));
   }
 
   // ---- 5b. Incidents on this sheet
-  if (incidents.length) {
+  if (incs.length) {
     let body = '';
-    for (const i of incidents) {
+    for (const i of incs) {
       let photos = '';
       for (const ref of (i.photos || [])) { const src = await resolveRef(ref); if (src) photos += `<img src="${src}" style="height:60mm;margin:2mm 2mm 0 0;border:1px solid #d7dde5">`; }
       body += `<div class="card" style="margin-bottom:8px;border-left:5px solid ${i.severity === 'High' ? '#c0392b' : i.severity === 'Medium' ? '#e67e22' : '#6b7280'}">
@@ -2553,13 +2558,13 @@ async function buildReportHTML() {
       sub('Challenges faced') + lines(F_('co_challenges')) +
       sub('Improvement suggestions') + lines(F_('co_improvements')) +
       (F_('co_tomorrow') ? sub('Plan for tomorrow') + lines(F_('co_tomorrow')) : '') +
-      sub('Summary') + `<pre style="font:9pt ui-monospace,Menlo,monospace;white-space:pre-wrap;padding:4px 14px">${esc(buildDaySummary())}</pre>`));
+      sub('Day Summary') + summaryCardsHTML(buildDaySummaryData(st, job, incs), card)));
   }
 
   // ---- 6. Permits
-  if (permitFiles.length) {
+  if (permitF.length) {
     let docs = '';
-    for (const f of permitFiles) {
+    for (const f of permitF) {
       docs += `<div class="fname">${esc(f.name)}</div>`;
       if (f.pending) { docs += `<div class="muted">PDF attached — not yet rendered for preview.</div>`; continue; }
       for (const ref of f.pages) { const src = await resolveRef(ref); docs += src ? `<div class="pg"><img src="${src}"></div>` : '<div class="muted">Page not available offline.</div>'; }
@@ -2569,8 +2574,11 @@ async function buildReportHTML() {
       cards([['Project', F_('da_project')], ['Job No.', jobNo], ['Date', wsDate], ['Location', F_('da_location')], ['Vessel / Facility', F_('da_vessel')], ['Supervisor', F_('da_supervisor')]]) + docs));
   }
 
+  if (ctx.parts) return out;
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(jobNo)} — Daily Worksheet ${esc(wsDate)}</title>
-<style>
+<style>${REPORT_CSS}</style></head><body>${out.join('')}</body></html>`;
+}
+const REPORT_CSS = `
 @page{size:A4;margin:0 0 10mm 0}
 *{box-sizing:border-box}
 body{margin:0;font:10.5pt/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;color:#1a2332;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
@@ -2617,7 +2625,110 @@ table.dv th{background:var(--c)}table.dv{margin-top:0}table.dv td{text-align:cen
 .muted{color:#6b7280;font-size:9.5pt;padding:4px 2px}
 .fname{font-weight:700;font-size:9.5pt;margin:12px 0 6px}
 .pg{break-before:page;padding-top:2mm}.pg img{width:100%;max-height:235mm;object-fit:contain;display:block;border:1px solid #e3e7ee}
-</style></head><body>${out.join('')}</body></html>`;
+.cover{padding:10mm 0}.cover h1{font-size:22pt;color:#002060;margin:0 0 4px}.cover .big{font-size:13pt;color:#6b7280;margin-bottom:14px}
+`;
+
+/* Rebuild the full activity log (manual + derived rows) from a saved state — no DOM needed */
+function activityFromState(st) {
+  const f = id => st.fields?.[id] || ''; const ed = st.autoRowEdits || {}; const rows = [];
+  for (const r of (st.activity || [])) rows.push({ time: r.time || '', desc: r.desc || '' });
+  for (const [id, label] of PAY_TIMES) { const t = f(id); if (t) rows.push({ time: t, desc: ed['time_' + id] ?? label.toUpperCase() }); }
+  for (let i = 0; i < NUM_DIVERS; i++) {
+    const name = f(`diver_${i}_name`);
+    for (let j = 0; j < (st.sub?.[i] || 1); j++) for (const [k, verb] of [['leftSurf', 'left surface'], ['leftBottom', 'left bottom'], ['arrSurf', 'arrived surface']]) {
+      const t = f(`d${i}s${j}_${k}`); if (t) rows.push({ time: t, desc: ed[`d${i}s${j}_${k}`] ?? `Diver ${i + 1}${name ? ` (${name})` : ''} ${verb}` });
+    }
+  }
+  let last = ''; for (let i = 14; i >= 0; i--) { const t = f(`ed_step_${i}_time`); if (t) { last = t; break; } }
+  if (last) rows.push({ time: last, desc: ed.drill_completed ?? `DIVING DRILL COMPLETED${f('ed_type') ? ` — ${f('ed_type')}` : ''}` });
+  return rows.filter(r => r.time || r.desc).sort((a, b) => (a.time || '99').localeCompare(b.time || '99'));
+}
+const fmtHrs = m => m == null ? '—' : `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
+
+/* Structured day summary — feeds the close-out email, the Close-Out tab and the report */
+function buildDaySummaryData(st = buildStateObject(), job = currentJob || {}, incs = incidents) {
+  const f = id => st.fields?.[id] || '';
+  const team = (st.team || []).filter(Boolean);
+  let dives = 0, bottom = 0; const divers = [];
+  for (let i = 0; i < NUM_DIVERS; i++) { const n = f(`diver_${i}_name`); let dv = 0, maxD = 0; for (let j = 0; j < (st.sub?.[i] || 1); j++) if (f(`d${i}s${j}_leftSurf`)) { dv++; bottom += +f(`d${i}s${j}_totalBottom`) || 0; maxD = Math.max(maxD, +f(`d${i}s${j}_depth`) || 0); } if (n && dv) divers.push({ name: n, dives: dv, max_depth: maxD }); dives += dv; }
+  return {
+    job_no: job.job_no || '', project: f('da_project'), date: f('da_date') || todayISO(), region: job.region || st.region || '',
+    location: f('da_location'), vessel: f('da_vessel'), client: f('da_client'), supervisor: f('da_supervisor'),
+    times: PAY_TIMES.map(([id, l]) => [l, f(id)]),
+    paid_min: diff(f('da_startWorkshop'), f('da_finishDay')), onsite_min: diff(f('da_arrivedOnsite'), f('da_departedSite')),
+    team, diving: st.divingMode !== false, dives, bottom_min: bottom, divers,
+    activity_count: activityFromState(st).filter(r => r.desc).length,
+    drill: f('ed_type') || (f('da_drillRequired') === 'No' ? 'not required' : 'none'),
+    swms: f('swms_title') || st.swms?.name || '',
+    equipment: (st.equipment || []).map(e => e.item).filter(Boolean),
+    incidents: (incs || []).map(i => ({ severity: i.severity, type: i.type })),
+    progress: f('co_progress'), challenges: f('co_challenges'), improvements: f('co_improvements'), tomorrow: f('co_tomorrow'),
+    issues: issuesFromState(st).filter(i => i !== 'Day close-out'),
+    signed_off: !!currentWs?.locked
+  };
+}
+/* Cards + sections for the summary. `card` is the report's card(label,val) when rendering into the PDF report; otherwise app styling. */
+function summaryCardsHTML(d, card) {
+  const c = card || ((l, v) => `<div class="sm-card"><div class="sm-lbl">${esc(l)}</div><div class="sm-val">${esc(v) || '—'}</div></div>`);
+  const grid = (items, cls = '') => `<div class="${card ? 'cards' : 'sm-grid'} ${cls}">${items.map(([l, v]) => c(l, v)).join('')}</div>`;
+  const head = t => card ? `<div class="sub">${esc(t)}</div>` : `<div class="sm-head">${esc(t)}</div>`;
+  const para = t => `<div class="${card ? 'notes' : 'sm-para'}">${esc(t || '—').split('\n').map(l => `<div>${l}</div>`).join('')}</div>`;
+  return grid(d.times, card ? 'c4' : '') +
+    grid([['Paid hours', fmtHrs(d.paid_min)], ['Onsite hours', fmtHrs(d.onsite_min)], ['Team', `${d.team.length}${d.team.length ? ' — ' + d.team.join(', ') : ''}`]]) +
+    grid(d.diving ? [['Dives', `${d.dives}${d.divers.length ? ' (' + d.divers.map(x => `${x.name} ×${x.dives}`).join(', ') + ')' : ''}`], ['Bottom time', fmtHrs(d.bottom_min)], ['Drill', d.drill]] : [['Mode', 'Non-diving day'], ['Drill', d.drill]]) +
+    grid([['SWMS', d.swms], ['Equipment', d.equipment.join(', ')], ['Incidents', d.incidents.length ? d.incidents.map(i => `${i.severity} ${i.type}`).join('; ') : 'none']]) +
+    (card ? '' : head('Progress made today') + para(d.progress) + head('Challenges faced') + para(d.challenges) + head('Improvement suggestions') + para(d.improvements) + (d.tomorrow ? head('Plan for tomorrow') + para(d.tomorrow) : ''));
+}
+
+/* ---- Worksheet package: every day of a job as one PDF (print dialog → Save as PDF) ---- */
+async function downloadPackage(jobId) {
+  const job = jobsById[jobId]; if (!job) return;
+  if (navigator.standalone) {
+    if (confirm('The worksheet package needs Safari.\n\nOK opens this app in Safari — sign in, then use Worksheet package on the job card → Share → Save to Files.')) window.open(location.href, '_blank');
+    return;
+  }
+  if (!online()) { alert('Building the package needs a connection.'); return; }
+  toast('Building worksheet package…', 6000);
+  try {
+    const [{ data: sheets, error }, { data: incs }] = await Promise.all([
+      sb.from('worksheets').select('*').eq('job_id', jobId).order('ws_date'),
+      sb.from('incidents').select('*').eq('job_id', jobId)
+    ]);
+    if (error) throw error;
+    if (!sheets?.length) { alert('No worksheets on this job yet.'); return; }
+    const byWs = {}; for (const i of (incs || [])) (byWs[i.worksheet_id] ||= []).push(i);
+    const parts = [];
+    const rows = [];
+    for (const w of sheets) {
+      const st = w.data || {}; st.fields ||= {}; st.sigs ||= {};
+      const d = buildDaySummaryData(st, job, byWs[w.id] || []);
+      rows.push([fmtDate(w.ws_date), esc(d.supervisor || w.updated_by_name || ''), String(d.team.length), d.diving ? String(d.dives) : 'Non-diving', fmtHrs(d.bottom_min), fmtHrs(d.paid_min), d.incidents.length ? `<b style="color:#c0392b">${d.incidents.length}</b>` : '—', w.locked ? '<b style="color:#27ae60">Signed off</b>' : (d.issues.length ? `<span style="color:#e67e22">${d.issues.length} missing</span>` : 'Working copy')]);
+      parts.push(...await buildReportHTML({ st, job, ws: w, incidents: byWs[w.id] || [], parts: true }));
+    }
+    const totPaid = sheets.reduce((a, w) => a + (buildDaySummaryData(w.data || { fields: {} }, job, []).paid_min || 0), 0);
+    const totDives = sheets.reduce((a, w) => a + buildDaySummaryData(w.data || { fields: {} }, job, []).dives, 0);
+    const logoCss = getComputedStyle(document.querySelector('.logo-hdr')).backgroundImage; const logo = (logoCss.match(/url\("?(.*?)"?\)/) || [])[1] || '';
+    const gen = new Date().toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
+    const cover = `<table class="doc"><thead><tr><td class="hd-cell"><div class="hd"><div class="hd-l">${logo ? `<img class="hd-logo" src="${logo}" alt="Franmarine">` : '<b>FRANMARINE</b>'}<small>Underwater Services</small></div><div class="hd-r"><b>WORKSHEET PACKAGE</b><small>Job: ${esc(job.job_no)} &nbsp; ${esc(job.region || '')}</small></div></div>
+      <div class="ft"><span>Franmarine Underwater Services Pty Ltd &nbsp;·&nbsp; ABN 81 059 653 459</span><span>Generated: ${esc(gen)}</span><span>${sheets.length} day${sheets.length === 1 ? '' : 's'}</span></div></td></tr></thead>
+      <tbody><tr><td class="body"><div class="cover"><h1>${esc(job.project)}</h1><div class="big">${esc(job.job_no)} · ${[job.client, job.location, job.vessel].filter(Boolean).map(esc).join(' · ')}</div>
+      <div class="cards c4">${[['Job No.', job.job_no], ['Client', job.client], ['Location', job.location], ['Vessel / Facility', job.vessel], ['Supervisor', job.supervisor], ['Region', job.region], ['First day', fmtDate(sheets[0].ws_date)], ['Last day', fmtDate(sheets[sheets.length - 1].ws_date)], ['Days worked', String(sheets.length)], ['Total dives', String(totDives)], ['Total paid hours', fmtHrs(totPaid)], ['Status', job.status === 'complete' ? 'Complete' : 'Active']].map(([l, v]) => `<div class="card"><div class="lbl">${esc(l)}</div><div class="val">${esc(v || '') || '&nbsp;'}</div></div>`).join('')}</div>
+      <div class="band">Days in this package</div>
+      <table class="t"><thead><tr><th>Date</th><th>Supervisor</th><th>Team</th><th>Dives</th><th>Bottom time</th><th>Paid hours</th><th>Incidents</th><th>Status</th></tr></thead><tbody>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>
+      <div class="muted" style="margin-top:10px">Each day's full Daily Worksheet follows, in date order. Pages carry the job number and date in the header.</div></div></td></tr></tbody></table>`;
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(job.job_no)} — Worksheet Package</title><style>${REPORT_CSS}</style></head><body>${cover}${parts.map(p => p.replace('<table class="doc">', '<table class="doc brk">')).join('')}</body></html>`;
+    const origTitle = document.title; document.title = `${job.job_no}_WorksheetPackage`.replace(/\s+/g, '_');
+    $('#reportFrame')?.remove();
+    const fr = document.createElement('iframe'); fr.id = 'reportFrame'; fr.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden';
+    document.body.appendChild(fr); fr.srcdoc = html;
+    fr.onload = async () => {
+      const d = fr.contentDocument;
+      await Promise.all(Array.from(d.images).filter(i => !i.complete).map(i => new Promise(r => { i.onload = i.onerror = r; })));
+      const done = () => { document.title = origTitle; setTimeout(() => fr.remove(), 1000); };
+      fr.contentWindow.addEventListener('afterprint', done, { once: true }); setTimeout(done, 120000);
+      fr.contentWindow.focus(); fr.contentWindow.print();
+    };
+  } catch (e) { console.warn(e); alert('Could not build the package: ' + (e.message || e)); }
 }
 
 function hideEmptyForPrint() {
@@ -2762,6 +2873,7 @@ const ACT = {
   addCrew:           addCrew,
   removeCrew:        el => removeCrew(el.dataset.id),
   showSummary:       el => showSummary(el.dataset.job),
+  downloadPackage:   el => downloadPackage(el.dataset.job),
   closeSummary:      () => $('#summaryPanel').classList.add('hidden')
 };
 
@@ -3037,6 +3149,7 @@ function renderJobs() {
       <div class="card-actions">
         ${done ? '' : `<button class="btn" data-act="openToday" data-job="${j.id}">${todayWs ? '📋 Open today' : '+ Today\'s worksheet'}</button>`}
         ${ws.length ? `<button class="btn ghost" data-act="showSummary" data-job="${j.id}">📊 Summary</button>` : ''}
+        ${ws.length ? `<button class="btn ghost" data-act="downloadPackage" data-job="${j.id}" title="One PDF of every day on this job">📦 Worksheet package</button>` : ''}
         ${mgr ? `<button class="btn ghost" data-act="toggleJobStatus" data-job="${j.id}">${done ? 'Reopen job' : '✓ Mark complete'}</button>` : ''}
       </div>
     </div>`;
@@ -3400,38 +3513,27 @@ async function ackIncident(id) {
 /* ---- Day close-out → summary → PDF → managers ---- */
 let closeoutReports = [];
 
-function buildDaySummary() {
-  const st = buildStateObject(); const f = id => st.fields[id] || ''; const job = currentJob || {};
-  const team = (st.team || []).filter(Boolean);
-  let dives = 0, bottom = 0; const divers = [];
-  for (let i = 0; i < NUM_DIVERS; i++) { const n = f(`diver_${i}_name`); let dv = 0; for (let j = 0; j < (st.sub?.[i] || 1); j++) if (f(`d${i}s${j}_leftSurf`)) { dv++; bottom += +f(`d${i}s${j}_totalBottom`) || 0; } if (n && dv) divers.push(`${n} ×${dv}`); dives += dv; }
-  const acts = Array.from($$('#activityBody tr')).filter(tr => tr.querySelector('input[type=text]')?.value).length;
-  const hrs = m => m == null ? '—' : `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
+function buildDaySummary(d = buildDaySummaryData()) {
   return [
-    `DAY CLOSE-OUT — ${job.job_no || ''} ${f('da_project')}`,
-    `${fmtDate(f('da_date') || todayISO())} · ${job.region || ''} · ${f('da_location')}${f('da_vessel') ? ' · ' + f('da_vessel') : ''}`,
-    `Client: ${f('da_client') || '—'}   Supervisor: ${f('da_supervisor') || '—'}`,
-    ``,
-    `Start day ${f('da_startWorkshop') || '—'} · Dep. workshop ${f('da_departedWorkshop') || '—'} · Arr. onsite ${f('da_arrivedOnsite') || '—'} · Job completed ${f('da_jobCompleted') || '—'}`,
-    `Dep. site ${f('da_departedSite') || '—'} · Arr. workshop ${f('da_arrivedWorkshop') || '—'} · Finished day ${f('da_finishDay') || '—'}`,
-    `Paid hours ${hrs(diff(f('da_startWorkshop'), f('da_finishDay')))} · Onsite ${hrs(diff(f('da_arrivedOnsite'), f('da_departedSite')))}`,
-    ``,
-    `Team (${team.length}): ${team.join(', ') || '—'}`,
-    st.divingMode !== false ? `Dives: ${dives}${divers.length ? ' (' + divers.join(', ') + ')' : ''} · Bottom time ${hrs(bottom)}` : `Non-diving day`,
-    `Activity log entries: ${acts} · Drill: ${f('ed_type') || (f('da_drillRequired') === 'No' ? 'not required' : 'none')} · SWMS: ${f('swms_title') || (swmsFile ? swmsFile.name : '—')}`,
-    `Equipment: ${(st.equipment || []).map(e => e.item).filter(Boolean).join(', ') || '—'}`,
-    `Incidents: ${incidents.length ? incidents.map(i => `${i.severity} ${i.type}`).join('; ') : 'none'}`,
-    ``,
-    `PROGRESS: ${f('co_progress') || '—'}`,
-    `CHALLENGES: ${f('co_challenges') || '—'}`,
-    `IMPROVEMENTS: ${f('co_improvements') || '—'}`,
-    f('co_tomorrow') ? `TOMORROW: ${f('co_tomorrow')}` : null
+    `DAY CLOSE-OUT — ${d.job_no} ${d.project}`,
+    `${fmtDate(d.date)} · ${d.region} · ${d.location}${d.vessel ? ' · ' + d.vessel : ''}`,
+    `Client: ${d.client || '—'}   Supervisor: ${d.supervisor || '—'}`, ``,
+    d.times.map(([l, v]) => `${l}: ${v || '—'}`).join(' · '),
+    `Paid hours ${fmtHrs(d.paid_min)} · Onsite ${fmtHrs(d.onsite_min)}`, ``,
+    `Team (${d.team.length}): ${d.team.join(', ') || '—'}`,
+    d.diving ? `Dives: ${d.dives}${d.divers.length ? ' (' + d.divers.map(x => `${x.name} ×${x.dives}`).join(', ') + ')' : ''} · Bottom time ${fmtHrs(d.bottom_min)}` : `Non-diving day`,
+    `Activity log entries: ${d.activity_count} · Drill: ${d.drill} · SWMS: ${d.swms || '—'}`,
+    `Equipment: ${d.equipment.join(', ') || '—'}`,
+    `Incidents: ${d.incidents.length ? d.incidents.map(i => `${i.severity} ${i.type}`).join('; ') : 'none'}`, ``,
+    `PROGRESS: ${d.progress || '—'}`, `CHALLENGES: ${d.challenges || '—'}`, `IMPROVEMENTS: ${d.improvements || '—'}`,
+    d.tomorrow ? `TOMORROW: ${d.tomorrow}` : null
   ].filter(l => l !== null).join('\n');
 }
 function renderCloseoutSummary() {
   const c = $('#coSummary'); if (!c || !currentWs) return;
-  c.textContent = buildDaySummary();
-  const issues = issuesFromState(buildStateObject()).filter(i => i !== 'Day close-out');
+  const d = buildDaySummaryData();
+  c.innerHTML = `<div class="sm-title">${esc(d.job_no)} — ${esc(d.project)}<small>${esc(fmtDate(d.date))} · ${esc(d.region)} · ${esc(d.location)}${d.vessel ? ' · ' + esc(d.vessel) : ''}</small></div>` + summaryCardsHTML(d);
+  const issues = d.issues;
   $('#coIssues').innerHTML = issues.length ? `<div class="issues">⚠ Still missing on this sheet: ${esc(issues.join(', '))}</div>` : '<div class="muted mt">✓ Nothing missing on this sheet.</div>';
 }
 async function copyCloseout() {
@@ -3480,7 +3582,7 @@ async function sendCloseout() {
     const { error: upErr } = await sb.storage.from(BUCKET).upload(path, blob, { contentType: 'application/pdf', upsert: true });
     if (upErr) throw upErr;
     const { data: rep, error } = await sb.from('closeout_reports')
-      .insert({ worksheet_id: currentWs.id, job_id: currentJob.id, ws_date: currentWs.ws_date, pdf_path: path, file_name: fname, summary_text: buildDaySummary(),
+      .insert({ worksheet_id: currentWs.id, job_id: currentJob.id, ws_date: currentWs.ws_date, pdf_path: path, file_name: fname, summary_text: buildDaySummary(), summary: buildDaySummaryData(),
                 sent_by: me.id, sent_by_name: me.name, email_status: 'pending' }).select('id').single();
     if (error) throw error;
     $('#coStatus').textContent = 'Emailing…';

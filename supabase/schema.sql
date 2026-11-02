@@ -268,6 +268,8 @@ create table if not exists public.closeout_reports (
   emailed_at    timestamptz,
   created_at    timestamptz not null default now()
 );
+alter table public.closeout_reports add column if not exists summary jsonb;
+alter table public.closeout_reports add column if not exists emailed_cc text[];
 alter table public.closeout_reports enable row level security;
 drop policy if exists "closeout_reports: read"   on public.closeout_reports;
 drop policy if exists "closeout_reports: insert" on public.closeout_reports;
