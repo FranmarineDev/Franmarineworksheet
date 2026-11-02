@@ -127,7 +127,7 @@ img.pending{min-height:80px;background:repeating-linear-gradient(45deg,#f4f6fa,#
 .user-row{display:grid;grid-template-columns:1fr 1fr 130px 90px 96px;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)}
 .user-row.head{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px}
 .user-row select{min-height:34px;padding:4px 8px}
-@media(max-width:600px){ .user-row{grid-template-columns:1fr 110px 80px 44px;font-size:13px} .user-row .em{display:none} .user-row .btn.sm .lbl{display:none} }
+@media(max-width:600px){ .user-row{grid-template-columns:1fr 110px 80px 44px;font-size:13px} .user-row .em{display:none} .user-row .btn.sm .lbl{display:none} .user-row #inv_email{display:block;grid-column:1/-1} }
 
 /* Incidents */
 .inc-sev{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;color:#fff;background:var(--warn)}
@@ -605,7 +605,16 @@ img{max-width:100%;height:auto}
         <button class="btn sm" data-act="sendLinkAll" id="sendLinkAllBtn">✉ Send new-link email to everyone listed</button>
         <span class="muted" id="sendLinkStatus"></span>
       </div>
-      <div class="muted mt">Each email carries a link to <b>this</b> address that lets the person choose a password and land in the app. The wording comes from Supabase → Authentication → Email Templates → <i>Reset Password</i>. Add new people in Supabase → Authentication → Users; they appear here on their first sign-in.</div>
+      <div class="muted mt">Each email carries a link to <b>this</b> address that lets the person choose a password and land in the app. The wording comes from Supabase → Authentication → Email Templates → <i>Reset Password</i>.</div>
+      <h3 style="margin:18px 0 6px">Invite a new person</h3>
+      <div class="user-row" style="border-bottom:none">
+        <input id="inv_name" placeholder="Full name" autocomplete="off">
+        <input id="inv_email" class="em" type="email" placeholder="name@franmarine.com.au" autocomplete="off" inputmode="email">
+        <select id="inv_role"><option value="supervisor">Supervisor</option><option value="manager">Manager</option></select>
+        <select id="inv_region"><option>NSW</option><option>WA</option></select>
+        <button class="btn sm" data-act="inviteUser" id="inviteBtn" title="Create the account and email an invite">+ Invite</button>
+      </div>
+      <div class="muted">They get an email with a link to this address to choose a password; the account appears above once sent. Wording: Supabase → Email Templates → <i>Invite user</i>.</div>
       <div class="login-err" id="usersErr"></div>
       <div id="storageGauge"></div>
     </div>
@@ -2893,7 +2902,8 @@ const ACT = {
   ackIncident:       el => ackIncident(el.dataset.id),
   openIncJob:        el => openTodayWorksheet(el.dataset.job),
   toggleCrew:        () => { $('#crewPanel').classList.toggle('hidden'); $('#usersPanel').classList.add('hidden'); renderCrew(); },
-  toggleUsers:       () => { $('#usersPanel').classList.toggle('hidden'); $('#crewPanel').classList.add('hidden'); loadUsers(); },
+  toggleUsers:       () => { $('#usersPanel').classList.toggle('hidden'); $('#crewPanel').classList.add('hidden'); if (me?.region) $('#inv_region').value = me.region; loadUsers(); },
+  inviteUser:        inviteUser,
   sendLinkOne:       el => { const u = usersList.find(x => x.id === el.dataset.id); if (u && confirm(`Email ${u.email} a link to this address (choose password + open app)?`)) sendLinkTo([u]); },
   sendLinkAll:       () => { const list = usersList.filter(u => (u.region || 'NSW') === me.region && u.email); if (list.length && confirm(`Email all ${list.length} ${me.region} users a link to this address?\n\nThe wording comes from the Supabase "Reset Password" email template — check it says what you want first.`)) sendLinkTo(list); },
   addCrew:           addCrew,
@@ -4150,6 +4160,22 @@ async function sendLinkTo(users) {
   st.textContent = `Sent ${ok} of ${targets.length}.`;
   if (failed.length) $('#usersErr').textContent = 'Not sent — ' + failed.join(' · ') + (failed.some(f => /rate|limit/i.test(f)) ? ' (Supabase email rate limit: wait a few minutes, or raise it under Authentication → Rate Limits.)' : '');
   else toast(`✓ ${ok === 1 ? 'Link sent' : ok + ' links sent'}`);
+}
+async function inviteUser() {
+  if (!online()) { $('#usersErr').textContent = 'Offline — inviting needs a connection.'; return; }
+  const full_name = $('#inv_name').value.trim(), email = $('#inv_email').value.trim().toLowerCase();
+  const role = $('#inv_role').value, region = $('#inv_region').value;
+  if (!full_name || !email) { $('#usersErr').textContent = 'Name and email are both needed.'; return; }
+  if (!confirm(`Create an account for ${full_name} (${email}) as ${role} in ${region} and email them an invite?`)) return;
+  const btn = $('#inviteBtn'); btn.disabled = true; $('#usersErr').textContent = '';
+  try {
+    const { data, error } = await sb.functions.invoke('invite-user', { body: { full_name, email, role, region } });
+    const msg = error ? (await error.context?.json?.().catch(() => null))?.error || error.message : data?.error;
+    if (msg) { $('#usersErr').textContent = msg; return; }
+    $('#inv_name').value = ''; $('#inv_email').value = '';
+    toast(`✓ Invite sent to ${email}`, 2000);
+    await loadUsers();
+  } finally { btn.disabled = false; }
 }
 async function setUserField(id, field, value) {
   if (field === 'region' && value !== me.region) {
