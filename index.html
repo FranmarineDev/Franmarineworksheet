@@ -3285,7 +3285,7 @@ async function archiveJob(jobId) {
 }
 
 /* ---- Storage gauge (managers) ---- */
-const PLAN_LIMITS = { files_gb: 1, db_gb: 0.5, label: 'Free plan' };   // update when the Supabase plan changes
+const PLAN_LIMITS = { files_gb: 100, db_gb: 8, label: 'Pro plan' };   // update when the Supabase plan changes
 const fmtBytes = b => b >= 1e9 ? (b / 1e9).toFixed(2) + ' GB' : b >= 1e6 ? (b / 1e6).toFixed(0) + ' MB' : (b / 1e3).toFixed(0) + ' KB';
 async function renderStorageGauge() {
   const c = $('#storageGauge'); if (!c || !isManager() || !online()) return;
