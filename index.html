@@ -145,6 +145,8 @@ img.pending{min-height:80px;background:repeating-linear-gradient(45deg,#f4f6fa,#
 .btn.send:disabled{opacity:.6;cursor:wait}
 
 /* QR codes, equipment, dive permit, close-out */
+.gauge{margin:8px 0}.gauge-l{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:3px}
+.gauge-b{height:8px;background:var(--border);border-radius:4px;overflow:hidden}.gauge-b div{height:100%;border-radius:4px}
 .sm-title{font-weight:700;font-size:15px;color:var(--navy,#002060);margin-bottom:8px}.sm-title small{display:block;font-weight:400;font-size:12px;color:var(--muted)}
 .sm-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:6px;margin-bottom:6px}
 .sm-card{border:1px solid var(--border);background:var(--panel,#f8f9fb);border-radius:6px;padding:6px 10px;min-width:0}
@@ -599,6 +601,7 @@ img{max-width:100%;height:auto}
       <div id="userRows"></div>
       <div class="muted mt">Add new people in Supabase → Authentication → Users; they appear here on their first sign-in.</div>
       <div class="login-err" id="usersErr"></div>
+      <div id="storageGauge"></div>
     </div>
     <div class="sec hidden" id="crewPanel">
       <h2>Crew list <span class="muted" style="text-transform:none;font-weight:400">Names offered when building a team roster</span></h2>
@@ -1694,6 +1697,16 @@ function clearSig(id) {
   scheduleSave();
 }
 
+/* Signatures are stored inside the worksheet record — keep them small (≈3 KB instead of 15–30 KB) */
+function sigDataURL(c) {
+  try {
+    const W = 360, H = Math.max(1, Math.round(c.height * W / c.width));
+    const o = document.createElement('canvas'); o.width = W; o.height = H;
+    const x = o.getContext('2d'); x.imageSmoothingEnabled = true; x.imageSmoothingQuality = 'high';
+    x.drawImage(c, 0, 0, W, H);
+    return o.toDataURL('image/png');
+  } catch { return c.toDataURL('image/png'); }
+}
 function isSigEmpty(canvas) {
   try {
     const d = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
@@ -1953,7 +1966,9 @@ async function handleSWMSFile(file) {
 }
 
 function fileBlock(e, removeAct, extra = '') {
-  const body = e.pending
+  const body = e.archived
+    ? `<div class="pdf-note">📦 Archived — the original PDF is kept on file; page previews were removed to save storage.</div>`
+    : e.pending
     ? `<div class="pdf-note">📄 PDF saved — preview will render once the PDF viewer has loaded (needs internet the first time).</div>`
     : e.pages.map(r => `<img data-ref="${esc(r)}" class="pending" alt="Loading preview…">`).join('');
   return `<div class="pdf-wrap" ${extra}>
@@ -2012,9 +2027,9 @@ const isDataRef = r => typeof r === 'string' && r.startsWith('data:');
 async function makeFileEntry(file, id) {
   const e = { id, name: file.name, kind: file.type === 'application/pdf' ? 'pdf' : 'img', raw: null, pages: [], pending: false };
   if (e.kind === 'img') { e.pages = [await fileToDataURL(file)]; return e; }
+  e.raw = await fileToDataURL(file);                                   // original PDF is always kept (small, and lets pages be archived later)
   const pages = window.pdfjsLib ? await renderPdfToImages(file).catch(() => null) : null;
-  if (pages) e.pages = pages;
-  else { e.raw = await fileToDataURL(file); e.pending = true; }   // keep the PDF, render later
+  if (pages) e.pages = pages; else e.pending = true;                  // render later if the viewer isn't loaded yet
   return e;
 }
 
@@ -2023,7 +2038,7 @@ function normaliseEntry(e, id) {
   if (!e) return null;
   if (e.data && !e.pages) e.pages = [e.data];
   return { id: e.id || id, name: e.name || 'file', kind: e.kind || 'pdf', raw: e.raw || null,
-           pages: Array.isArray(e.pages) ? e.pages : [], pending: !!e.pending };
+           pages: Array.isArray(e.pages) ? e.pages : [], pending: !!e.pending, archived: !!e.archived };
 }
 
 async function uploadRef(ref, path, contentType) {
@@ -2069,7 +2084,7 @@ async function flushFiles() {
   try {
     for (const e of [swmsFile, ...permitFiles].filter(Boolean)) {
       const base = `${wsId}/${e.id}`;
-      if (e.pending && e.raw && window.pdfjsLib) {
+      if (e.pending && !e.archived && e.raw && window.pdfjsLib) {
         const src = await resolveRef(e.raw);
         if (src) {
           const blob = await (await fetch(src)).blob();
@@ -2096,7 +2111,7 @@ async function flushFiles() {
 /* Shared PDF helper for SWMS + Permits */
 async function renderPdfToImages(file) {
   if (!window.pdfjsLib) return null;
-  pdfjsLib.GlobalWorkerOptions.workerSrc =
+  if (!pdfjsLib.GlobalWorkerOptions.workerSrc) pdfjsLib.GlobalWorkerOptions.workerSrc =
     'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
@@ -2224,7 +2239,7 @@ function buildStateObject() {
   state.equipment = equipmentRows.filter(r => r.item || r.notes);
   // Signatures, only if non-empty
   $$('canvas[data-sig]').forEach(c => {
-    if (!isSigEmpty(c)) state.sigs[c.dataset.sig] = c.toDataURL('image/png');
+    if (!isSigEmpty(c)) state.sigs[c.dataset.sig] = sigDataURL(c);
   });
   // Manual activity rows (auto-rows are derived)
   state.activity = Array.from($$('#activityBody tr:not(.auto-row)')).map(tr => {
@@ -2505,7 +2520,8 @@ async function buildReportHTML(ctx = {}) {
   if (F_('swms_title') || swmsF || swmsSigs) {
     let pages = '';
     if (swmsF) {
-      if (swmsF.pending) pages = `<div class="muted">SWMS PDF “${esc(swmsF.name)}” is attached but not yet rendered for preview.</div>`;
+      if (swmsF.archived) pages = `<div class="muted">SWMS PDF “${esc(swmsF.name)}” is on file (archived — pages not reproduced here).</div>`;
+      else if (swmsF.pending) pages = `<div class="muted">SWMS PDF “${esc(swmsF.name)}” is attached but not yet rendered for preview.</div>`;
       else for (const ref of swmsF.pages) { const src = await resolveRef(ref); pages += src ? `<div class="pg"><img src="${src}"></div>` : '<div class="muted">Page not available offline.</div>'; }
     }
     out.push(section(
@@ -2566,6 +2582,7 @@ async function buildReportHTML(ctx = {}) {
     let docs = '';
     for (const f of permitF) {
       docs += `<div class="fname">${esc(f.name)}</div>`;
+      if (f.archived) { docs += `<div class="muted">PDF on file (archived — pages not reproduced here).</div>`; continue; }
       if (f.pending) { docs += `<div class="muted">PDF attached — not yet rendered for preview.</div>`; continue; }
       for (const ref of f.pages) { const src = await resolveRef(ref); docs += src ? `<div class="pg"><img src="${src}"></div>` : '<div class="muted">Page not available offline.</div>'; }
     }
@@ -2874,6 +2891,7 @@ const ACT = {
   removeCrew:        el => removeCrew(el.dataset.id),
   showSummary:       el => showSummary(el.dataset.job),
   downloadPackage:   el => downloadPackage(el.dataset.job),
+  archiveJob:        el => archiveJob(el.dataset.job),
   closeSummary:      () => $('#summaryPanel').classList.add('hidden')
 };
 
@@ -3138,7 +3156,7 @@ function renderJobs() {
       <div class="card-head">
         <span class="badge">${esc(j.job_no)}</span>
         <span class="badge region">${esc(j.region)}</span>
-        ${done ? '<span class="badge done">COMPLETE</span>' : signal}
+        ${done ? (j.archived_at ? '<span class="badge done" title="Rendered page images removed; originals kept">ARCHIVED</span>' : '<span class="badge done">COMPLETE</span>') : signal}
         <span style="flex:1"></span>
         ${mgr ? `<button class="link" data-act="editJob" data-job="${j.id}">Edit</button>` : ''}
       </div>
@@ -3151,6 +3169,7 @@ function renderJobs() {
         ${ws.length ? `<button class="btn ghost" data-act="showSummary" data-job="${j.id}">📊 Summary</button>` : ''}
         ${ws.length ? `<button class="btn ghost" data-act="downloadPackage" data-job="${j.id}" title="One PDF of every day on this job">📦 Worksheet package</button>` : ''}
         ${mgr ? `<button class="btn ghost" data-act="toggleJobStatus" data-job="${j.id}">${done ? 'Reopen job' : '✓ Mark complete'}</button>` : ''}
+        ${mgr && done && ws.length && !j.archived_at ? `<button class="btn ghost" data-act="archiveJob" data-job="${j.id}" title="Remove rendered SWMS / permit page images for every day on this job. Originals and all worksheet data are kept.">🗄 Archive files</button>` : ''}
       </div>
     </div>`;
   }).join('');
@@ -3202,6 +3221,48 @@ async function toggleJobStatus(id) {
   const { error } = await sb.from('jobs').update({ status, updated_at: new Date().toISOString() }).eq('id', id);
   if (error) { toast('✗ ' + error.message, 2500); return; }
   await loadDashboard();
+}
+
+/* ---- Archive a completed job's rendered pages (originals + data stay) ---- */
+async function archiveJob(jobId) {
+  const j = jobsById[jobId]; if (!j || !isManager()) return;
+  if (!online()) { toast('Offline — try again when connected', 2000); return; }
+  if (!confirm(`Archive files for ${j.job_no}?\n\nThis removes the rendered SWMS and permit page images for every day on this job to free storage. The original PDFs, all worksheet data, signatures, photos and reports are kept.\n\nTip: download the Worksheet package first if you want a copy with the pages laid out.`)) return;
+  toast('Archiving…', 5000);
+  try {
+    const { data: sheets, error } = await sb.from('worksheets').select('id, data, version').eq('job_id', jobId);
+    if (error) throw error;
+    let removed = 0, skipped = 0;
+    for (const w of sheets || []) {
+      const d = w.data || {}; let changed = false; const paths = [];
+      const entries = [d.swms, ...(Array.isArray(d.permits) ? d.permits : [])].filter(Boolean);
+      for (const e of entries) {
+        if (e.archived || e.kind === 'img' || !e.raw || isDataRef(e.raw)) { if (e.pages?.length && !e.archived) skipped++; continue; }
+        for (const r of e.pages || []) if (r && !isDataRef(r)) paths.push(r);
+        e.pages = []; e.archived = true; e.pending = false; changed = true;
+      }
+      if (paths.length) { const { error: re } = await sb.storage.from(BUCKET).remove(paths); if (re) throw re; removed += paths.length; }
+      if (changed) { const { error: ue } = await sb.from('worksheets').update({ data: d, version: (w.version || 1) + 1 }).eq('id', w.id); if (ue) throw ue; }
+    }
+    await sb.from('jobs').update({ archived_at: new Date().toISOString() }).eq('id', jobId);
+    await loadDashboard();
+    alert(`Archived ${j.job_no}: ${removed} page image${removed === 1 ? '' : 's'} removed.${skipped ? `\n${skipped} document${skipped === 1 ? '' : 's'} kept as-is (no original PDF stored — older upload or an image).` : ''}`);
+  } catch (e) { console.warn(e); alert('Archive failed: ' + (e.message || e)); }
+}
+
+/* ---- Storage gauge (managers) ---- */
+const PLAN_LIMITS = { files_gb: 1, db_gb: 0.5, label: 'Free plan' };   // update when the Supabase plan changes
+const fmtBytes = b => b >= 1e9 ? (b / 1e9).toFixed(2) + ' GB' : b >= 1e6 ? (b / 1e6).toFixed(0) + ' MB' : (b / 1e3).toFixed(0) + ' KB';
+async function renderStorageGauge() {
+  const c = $('#storageGauge'); if (!c || !isManager() || !online()) return;
+  const { data, error } = await sb.rpc('storage_usage');
+  if (error || !data) { c.innerHTML = `<div class="muted">Storage usage unavailable${error ? ': ' + esc(error.message) : ''}</div>`; return; }
+  const bar = (label, used, limitGb) => { const pct = Math.min(100, Math.round(used / (limitGb * 1e9) * 100)); return `<div class="gauge"><div class="gauge-l"><span>${label}</span><span>${fmtBytes(used)} of ${limitGb} GB · ${pct}%</span></div><div class="gauge-b"><div style="width:${pct}%;background:${pct > 85 ? 'var(--bad)' : pct > 60 ? '#e67e22' : 'var(--navy,#002060)'}"></div></div></div>`; };
+  const top = (data.by_job || []).slice(0, 5);
+  c.innerHTML = `<h2 style="margin-top:14px">Storage <span class="muted" style="text-transform:none;font-weight:400">${esc(PLAN_LIMITS.label)} limits · ${data.files_count || 0} files</span></h2>
+    ${bar('Files (PDF pages, photos, reports)', +data.files_bytes || 0, PLAN_LIMITS.files_gb)}
+    ${bar('Database (worksheets, signatures)', +data.db_bytes || 0, PLAN_LIMITS.db_gb)}
+    ${top.length ? `<div class="muted mt" style="font-size:12px">Largest jobs: ${top.map(t => `<b>${esc(t.job_no)}</b> ${fmtBytes(+t.bytes)}${t.status === 'complete' && !t.archived_at ? ' <i>(complete — can be archived)</i>' : ''}`).join(' · ')}</div>` : ''}`;
 }
 
 /* ---- Opening worksheets ---- */
@@ -4012,7 +4073,7 @@ async function loadUsers() {
   if (!online()) { $('#usersErr').textContent = 'Offline — user list needs a connection.'; return; }
   const { data, error } = await sb.from('profiles').select('id, email, full_name, role, region').order('full_name');
   if (error) { $('#usersErr').textContent = error.message; return; }
-  usersList = data; $('#usersErr').textContent = ''; renderUsers();
+  usersList = data; $('#usersErr').textContent = ''; renderUsers(); renderStorageGauge();
 }
 function renderUsers() {
   const visible = usersList.filter(u => (u.region || 'NSW') === me.region);

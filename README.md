@@ -69,6 +69,11 @@ Three functions send mail through `no-reply@franmarine.com.au` (secrets `SMTP_HO
 - Pre-start QR codes are per region (`qr/nsw-*.png`, `qr/wa-*.png`) and are shown on the sheet for the job's region.
 - **Hours CSV** per job and **Import jobs** from a spreadsheet are in the dashboard (managers).
 
+## Storage
+- Signatures are stored small (~3 KB each) inside the worksheet record.
+- Uploaded PDFs keep the original file plus rendered page images. On a **completed** job, managers can **🗄 Archive files** on the job card: page images are deleted, originals and all data stay. Download the Worksheet package first if you want the pages laid out.
+- Options → Users shows a storage gauge (files and database against the plan limits in `PLAN_LIMITS` in `index.html` — update it when the Supabase plan changes).
+
 ## Backups
 **Table Editor → worksheets → Export as CSV** for a quick manual backup, or the per-sheet *Save to JSON* in the app. Supabase's own point-in-time backups need a paid plan. Files are in Storage → `worksheet-files`.
 

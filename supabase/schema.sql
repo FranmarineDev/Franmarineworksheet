@@ -104,6 +104,7 @@ create table if not exists public.jobs (
   updated_at  timestamptz not null default now()
 );
 create index if not exists jobs_status_idx on public.jobs (status, created_at desc);
+alter table public.jobs add column if not exists archived_at timestamptz;
 
 -- ---------- Worksheets (one per job per day; the whole form lives in `data`) ----------
 create table if not exists public.worksheets (
@@ -326,3 +327,28 @@ cross join lateral jsonb_array_elements(coalesce(w.summary->'divers', '[]'::json
 -- Make the views run as the person querying them, so region scoping applies there too.
 alter view public.job_summary set (security_invoker = on);
 alter view public.diver_hours set (security_invoker = on);
+
+
+-- ---------- Storage usage (managers) ----------
+create or replace function public.storage_usage()
+returns jsonb language plpgsql stable security definer set search_path = public, storage as $$
+declare r jsonb;
+begin
+  if not public.is_manager() then raise exception 'managers only'; end if;
+  select jsonb_build_object(
+    'db_bytes', pg_database_size(current_database()),
+    'files_bytes', coalesce((select sum((o.metadata->>'size')::bigint) from storage.objects o where o.bucket_id = 'worksheet-files'), 0),
+    'files_count', (select count(*) from storage.objects o where o.bucket_id = 'worksheet-files'),
+    'by_job', coalesce((
+      select jsonb_agg(x order by (x->>'bytes')::bigint desc) from (
+        select jsonb_build_object('job_no', j.job_no, 'status', j.status, 'archived_at', j.archived_at, 'region', j.region,
+                                  'bytes', sum((o.metadata->>'size')::bigint)) as x
+        from storage.objects o
+        join public.worksheets w on w.id::text = split_part(o.name, '/', 1)
+        join public.jobs j on j.id = w.job_id
+        where o.bucket_id = 'worksheet-files' and public.can_see_region(j.region)
+        group by j.id, j.job_no, j.status, j.archived_at, j.region) s), '[]'::jsonb)
+  ) into r;
+  return r;
+end $$;
+grant execute on function public.storage_usage() to authenticated;
