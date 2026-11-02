@@ -105,6 +105,9 @@ create table if not exists public.jobs (
 );
 create index if not exists jobs_status_idx on public.jobs (status, created_at desc);
 alter table public.jobs add column if not exists archived_at timestamptz;
+alter table public.jobs add column if not exists start_date date;                    -- planned first day on site
+alter table public.jobs add column if not exists supervisor_notified_at timestamptz; -- notify-job-assigned function
+alter table public.jobs add column if not exists supervisor_notified_to text;
 
 -- ---------- Worksheets (one per job per day; the whole form lives in `data`) ----------
 create table if not exists public.worksheets (

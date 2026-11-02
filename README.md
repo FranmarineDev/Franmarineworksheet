@@ -60,7 +60,7 @@ select * from diver_hours where ws_date >= '2026-11-01' order by diver, ws_date;
 `worksheets.summary` holds each day's compact figures; `worksheets.data` is the full sheet as JSON.
 
 ## Emails (Edge Functions)
-Three functions send mail through `no-reply@franmarine.com.au` (secrets `SMTP_HOST/PORT/USER/PASS/FROM`, `APP_URL`); `invite-user` creates accounts and sends Supabase's own invite email (needs only `APP_URL`), and `remove-user` deletes an account:
+Three functions send mail through `no-reply@franmarine.com.au` (secrets `SMTP_HOST/PORT/USER/PASS/FROM`, `APP_URL`); `invite-user` creates accounts and sends Supabase's own invite email (needs only `APP_URL`), `remove-user` deletes an account, and `notify-job-assigned` emails the supervisor when a manager puts them on a job (job no., project, start date, client, location — matched to a user account by name in the job's region):
 - `notify-incident` → the job region's managers + HSEQ (`HSEQ_TO`, default Belinda), incident PDF attached.
 - `send-drill-report` → `DRILL_TO` (default Belinda), cc region managers, drill PDF attached.
 - `send-closeout-report` → region managers (optional `CLOSEOUT_CC`), day close-out PDF attached. Sent from the **Close-Out** tab.

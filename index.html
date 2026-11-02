@@ -661,7 +661,8 @@ img{max-width:100%;height:auto}
         <label class="f"><span>Client</span><input id="jf_client"></label>
         <label class="f"><span>Location</span><input id="jf_location"></label>
         <label class="f"><span>Vessel / Facility</span><input id="jf_vessel"></label>
-        <label class="f"><span>Supervisor</span><input id="jf_supervisor"></label>
+        <label class="f"><span>Start date</span><input id="jf_start_date" type="date"></label>
+        <label class="f"><span>Supervisor</span><input id="jf_supervisor" list="supervisorList" placeholder="Pick a user account" autocomplete="off"></label>
         <label class="f"><span>Client Contact</span><input id="jf_contact"></label>
         <label class="f"><span>Contact Number</span><input id="jf_contact_ph" type="tel"></label>
       </div>
@@ -753,6 +754,7 @@ img{max-width:100%;height:auto}
 <datalist id="diverReviewList"></datalist>
 <datalist id="byWhomList"></datalist>
 <datalist id="crewList"></datalist>
+<datalist id="supervisorList"></datalist>
 <datalist id="equipList"></datalist>
 </div><!-- /appView -->
 
@@ -3207,7 +3209,7 @@ function renderJobs() {
         ${mgr ? `<button class="link" data-act="editJob" data-job="${j.id}">Edit</button>` : ''}
       </div>
       <div class="card-title">${esc(j.project)}</div>
-      <div class="card-meta">${meta || '<i>No client / location set</i>'}${j.supervisor ? `<br>Supervisor: <b>${esc(j.supervisor)}</b>` : ''}</div>
+      <div class="card-meta">${meta || '<i>No client / location set</i>'}${j.supervisor ? `<br>Supervisor: <b>${esc(j.supervisor)}</b>` : ''}${j.start_date ? `${j.supervisor ? ' · ' : '<br>'}Starts ${fmtDate(j.start_date)}` : ''}</div>
       <div class="card-meta">${ws.length} worksheet${ws.length === 1 ? '' : 's'} · ${last}</div>
       <div class="ws-list">${chips}${more}</div>
       <div class="card-actions">
@@ -3221,13 +3223,16 @@ function renderJobs() {
   }).join('');
 }
 $('#showDone').addEventListener('change', renderJobs);
+$('#jf_region').addEventListener('change', fillSupervisorList);
 
 function showJobForm(job) {
   $('#jobForm').classList.remove('hidden');
   $('#jobFormTitle').textContent = job ? `Edit ${job.job_no}` : 'New Job';
   $('#jf_id').value = job?.id || '';
-  for (const k of ['job_no','project','region','client','location','vessel','supervisor','contact','contact_ph'])
+  for (const k of ['job_no','project','region','client','location','vessel','start_date','supervisor','contact','contact_ph'])
     $('#jf_' + k).value = job?.[k] ?? (k === 'region' ? me.region : '');
+  $('#jobForm').dataset.prevSupervisor = job?.supervisor || '';
+  fillSupervisorList();
   $('#jobErr').textContent = '';
   $('#deleteJobBtn').classList.toggle('hidden', !job || (job.worksheets || []).length > 0);
   $('#jobForm').scrollIntoView({ behavior:'smooth', block:'start' });
@@ -3237,7 +3242,7 @@ function hideJobForm() { $('#jobForm').classList.add('hidden'); }
 
 async function saveJob() {
   const row = {};
-  for (const k of ['job_no','project','region','client','location','vessel','supervisor','contact','contact_ph'])
+  for (const k of ['job_no','project','region','client','location','vessel','start_date','supervisor','contact','contact_ph'])
     row[k] = $('#jf_' + k).value.trim() || null;
   if (!row.job_no || !row.project) { $('#jobErr').textContent = 'Job No. and Project are required.'; return; }
   if (!online()) { $('#jobErr').textContent = 'You are offline — jobs can only be added when connected.'; return; }
@@ -3246,9 +3251,34 @@ async function saveJob() {
   if (id) res = await sb.from('jobs').update({ ...row, updated_at: new Date().toISOString() }).eq('id', id);
   else    res = await sb.from('jobs').insert({ ...row, created_by: me.id });
   if (res.error) { $('#jobErr').textContent = res.error.message; return; }
+  const supChanged = row.supervisor && row.supervisor !== ($('#jobForm').dataset.prevSupervisor || '');
   hideJobForm();
   await loadDashboard();
   toast(id ? '✓ Job updated' : '✓ Job added');
+  if (supChanged) {
+    let jobId = id;
+    if (!jobId) { const j = Object.values(jobsById).find(x => x.job_no === row.job_no && x.project === row.project); jobId = j?.id; }
+    if (jobId) notifyJobAssigned(jobId, row.supervisor);
+  }
+}
+/* Email the supervisor named on the job that they've been put on it (notify-job-assigned function). */
+async function notifyJobAssigned(jobId, name) {
+  try {
+    const { data, error } = await sb.functions.invoke('notify-job-assigned', { body: { job_id: jobId } });
+    const msg = error ? (await error.context?.json?.().catch(() => null))?.error || error.message : data?.error;
+    if (msg) { toast(`Supervisor email not sent: ${msg}`, 4000); return; }
+    if (data?.skipped) { toast(`No email — ${data.skipped}`, 4000); return; }
+    toast(`✉ ${name} emailed about this job`, 2500);
+  } catch (e) { toast('Supervisor email not sent: ' + e.message, 4000); }
+}
+/* Supervisor picker = user accounts in the job's region (so the assignment email can find them). */
+async function fillSupervisorList() {
+  const region = $('#jf_region').value || me.region;
+  if (!usersList.length && online()) {
+    const { data } = await sb.from('profiles').select('id, email, full_name, role, region').order('full_name');
+    if (data) usersList = data;
+  }
+  $('#supervisorList').innerHTML = usersList.filter(u => (u.region || 'NSW') === region && u.full_name).map(u => `<option value="${esc(u.full_name)}">`).join('');
 }
 
 async function deleteJob() {
