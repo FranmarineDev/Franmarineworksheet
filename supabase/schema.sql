@@ -167,6 +167,46 @@ create policy "worksheets: update" on public.worksheets for update to authentica
 create policy "worksheets: managers delete" on public.worksheets for delete to authenticated
   using (public.is_manager() and public.can_see_job(job_id));
 
+-- ---------- Incidents / near-misses (sent to the region's managers by the notify-incident function) ----------
+create table if not exists public.incidents (
+  id                   uuid primary key default gen_random_uuid(),
+  worksheet_id         uuid references public.worksheets (id) on delete set null,
+  job_id               uuid not null references public.jobs (id) on delete cascade,
+  ws_date              date not null,
+  type                 text not null,
+  severity             text not null check (severity in ('Low', 'Medium', 'High')),
+  occurred_at          time,
+  people               text,
+  location             text,
+  description          text not null,
+  actions              text,
+  injury               text,
+  work_stopped         text,
+  photos               jsonb not null default '[]'::jsonb,       -- storage paths
+  status               text not null default 'open' check (status in ('open', 'acknowledged', 'closed')),
+  reported_by          uuid references public.profiles (id),
+  reported_by_name     text,
+  acknowledged_by      uuid references public.profiles (id),
+  acknowledged_by_name text,
+  acknowledged_at      timestamptz,
+  email_status         text not null default 'pending' check (email_status in ('pending', 'sent', 'failed')),
+  email_error          text,
+  emailed_to           text[],
+  emailed_at           timestamptz,
+  created_at           timestamptz not null default now()
+);
+create index if not exists incidents_job_idx on public.incidents (job_id, created_at desc);
+alter table public.incidents enable row level security;
+drop policy if exists "incidents: read"          on public.incidents;
+drop policy if exists "incidents: report"        on public.incidents;
+drop policy if exists "incidents: managers edit" on public.incidents;
+create policy "incidents: read"   on public.incidents for select to authenticated using (public.can_see_job(job_id));
+create policy "incidents: report" on public.incidents for insert to authenticated with check (public.can_see_job(job_id));
+-- reporter may attach photos right after reporting; managers acknowledge / close
+create policy "incidents: managers edit" on public.incidents for update to authenticated
+  using (public.can_see_job(job_id) and (public.is_manager() or reported_by = auth.uid()))
+  with check (public.can_see_job(job_id));
+
 -- ---------- Storage bucket for SWMS / permit files ----------
 insert into storage.buckets (id, name, public, file_size_limit)
 values ('worksheet-files', 'worksheet-files', false, 26214400)      -- 25 MB per file

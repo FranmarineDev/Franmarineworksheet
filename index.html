@@ -94,8 +94,8 @@ body{font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif
 .lock-banner{background:#e8edf7;border-bottom:1px solid var(--border-2);color:var(--navy);padding:9px 14px;
   font-size:13px;line-height:1.45}
 .lock-banner b{font-weight:700}
-#appView.locked #root :is(input,select,textarea){pointer-events:none;background:#f4f6fa;color:#4b5563}
-#appView.locked #root :is(.btn,.link,.x,.drop,.rm,canvas,[data-act]){pointer-events:none;opacity:.45}
+#appView.locked #root :is(input,select,textarea):not([id^="inc_"]){pointer-events:none;background:#f4f6fa;color:#4b5563}
+#appView.locked #root :is(.btn,.link,.x,.drop,.rm,canvas,[data-act]):not(#page-inc *){pointer-events:none;opacity:.45}
 #appView.locked .fab{display:none}
 img.pending{min-height:80px;background:repeating-linear-gradient(45deg,#f4f6fa,#f4f6fa 10px,#eef1f6 10px,#eef1f6 20px);
   color:var(--muted);font-size:12px;text-align:center}
@@ -125,6 +125,21 @@ img.pending{min-height:80px;background:repeating-linear-gradient(45deg,#f4f6fa,#
 .user-row.head{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px}
 .user-row select{min-height:34px;padding:4px 8px}
 @media(max-width:600px){ .user-row{grid-template-columns:1fr 110px 80px;font-size:13px} .user-row .em{display:none} }
+
+/* Incidents */
+.inc-sev{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;color:#fff;background:var(--warn)}
+.inc-sev.high{background:var(--bad)}.inc-sev.low{background:#6b7280}
+.inc-item{border:1px solid var(--border);border-left:5px solid var(--bad);border-radius:6px;padding:10px 12px;margin-bottom:8px;background:#fff}
+.inc-item.acknowledged{border-left-color:var(--ok)}.inc-item.closed{border-left-color:var(--border-2);opacity:.8}
+.inc-item .meta{font-size:12px;color:var(--muted);margin-top:4px}
+.inc-photos{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.inc-photos img{height:70px;border-radius:4px;border:1px solid var(--border)}
+.inc-banner{background:#fdecea;border:1px solid #f5b7b1;color:#7b1e1e;padding:10px 14px;border-radius:8px;margin-bottom:14px;font-size:13px}
+.inc-banner b{color:var(--bad)}
+.badge.incident{background:var(--bad);color:#fff}
+.nav.alert,.pill.alert{color:var(--bad);font-weight:700}
+.btn.send{background:var(--bad);border-color:var(--bad);font-weight:700}
+.btn.send:disabled{opacity:.6;cursor:wait}
 
 /* Sync pill (worksheet header) */
 .sync{display:inline-flex;align-items:center;gap:6px;font-size:11px;opacity:.9;white-space:nowrap}
@@ -535,6 +550,7 @@ img{max-width:100%;height:auto}
   <main class="dash">
     <div id="dashBanner" class="dash-banner hidden"></div>
     <div id="pendingBanner" class="pending-banner hidden"></div>
+    <div id="incBanner" class="inc-banner hidden"></div>
     <div class="dash-top">
       <h1>Running Jobs</h1>
       <label><input type="checkbox" id="showDone"> Show completed</label>
@@ -623,6 +639,7 @@ img{max-width:100%;height:auto}
     <button class="nav" data-tab="swms">📄 SWMS Sign-Off</button>
     <button class="nav" data-tab="ed">🚨 Emergency Drill</button>
     <button class="nav" data-tab="perm">🗂 Permits</button>
+    <button class="nav" data-tab="inc" id="navInc">⚠️ Incident</button>
   </aside>
   <div>
     <div class="pills">
@@ -632,6 +649,7 @@ img{max-width:100%;height:auto}
       <button class="pill" data-tab="swms">SWMS</button>
       <button class="pill" data-tab="ed">Drill</button>
       <button class="pill" data-tab="perm">Permits</button>
+      <button class="pill" data-tab="inc" id="pillInc">Incident</button>
     </div>
     <div class="lock-banner hidden" id="lockBanner"></div>
     <main id="root"></main>
@@ -1090,6 +1108,51 @@ function pageDrill() {
   </section>`;
 }
 
+const INC_TYPES = ['Near miss', 'Injury / illness', 'Equipment failure', 'Environmental (spill / release)', 'Property / vessel damage', 'Security / access', 'Other'];
+
+function pageIncident() {
+  return `
+  <section class="page" id="page-inc" data-tab="inc">
+    <h1>⚠️ Incident / Near-Miss Report</h1>
+
+    <div class="sec">
+      <h2>Report an incident <span class="muted" style="text-transform:none;font-weight:400">Sends straight to the ${esc(currentJob?.region || '')} managers by email and flags the job on the dashboard</span></h2>
+      <div class="g3">
+        ${S('inc_type', 'Type *', INC_TYPES)}
+        ${S('inc_severity', 'Severity *', ['Low', 'Medium', 'High'])}
+        ${F('inc_time', 'Time of incident', { type:'time' })}
+      </div>
+      <div class="g2 mt">
+        ${F('inc_people', 'People involved', { list:'teamList', pl:'Names…' })}
+        ${F('inc_location', 'Where exactly', { pl:'e.g. Wharf 3 dive station' })}
+      </div>
+      <div class="mt">${TA('inc_desc', 'What happened *', 4, { pl:'Factual description — what, how, equipment involved, conditions…' })}</div>
+      <div class="mt">${TA('inc_actions', 'Immediate actions taken', 3, { pl:'First aid, isolation, work stopped, notifications…' })}</div>
+      <div class="g2 mt">
+        ${S('inc_injury', 'Any injury?', ['No', 'First aid only', 'Medical treatment', 'Hospital'])}
+        ${S('inc_workStopped', 'Work stopped?', ['No', 'Yes — resumed', 'Yes — remains stopped'])}
+      </div>
+      <div class="mt">
+        <label class="drop" id="incDrop">
+          <strong>Add photos</strong>
+          <p>Tap to take or choose photos (JPG, PNG, HEIC).</p>
+          <input type="file" accept="image/*" multiple hidden data-drop="inc">
+        </label>
+        <div class="inc-photos" id="incPhotos"></div>
+      </div>
+      <div class="flex mt" style="gap:12px;align-items:center;flex-wrap:wrap">
+        <button class="btn send" data-act="sendIncident" id="sendIncBtn">🚨 Send to managers</button>
+        <span class="muted" id="incStatus">Reported by ${esc(me?.name || '')}</span>
+      </div>
+    </div>
+
+    <div class="sec">
+      <h2>Incidents on this sheet</h2>
+      <div id="incList" class="muted">None reported.</div>
+    </div>
+  </section>`;
+}
+
 function pagePermits() {
   return `
   <section class="page" id="page-perm" data-tab="perm">
@@ -1120,7 +1183,7 @@ function pagePermits() {
 
 function renderAll() {
   $('#root').innerHTML =
-    pageDaily() + pageDive() + pageToolbox() + pageSWMS() + pageDrill() + pagePermits();
+    pageDaily() + pageDive() + pageToolbox() + pageSWMS() + pageDrill() + pagePermits() + pageIncident();
   $('#siList').innerHTML = SI_BANDS.map(b => `<option>${b}</option>`).join('');
   $('#byWhomList').innerHTML = BY_WHOM_OPTIONS.map(o => `<option>${o}</option>`).join('');
   renderTeamUI();
@@ -1920,7 +1983,7 @@ function buildStateObject() {
   };
   // All named inputs/textareas/selects in #root, keyed by id
   $$('#root input[id], #root textarea[id], #root select[id]').forEach(el => {
-    if (el.type === 'file') return;
+    if (el.type === 'file' || el.id.startsWith('inc_')) return;   // incident form is its own record
     state.fields[el.id] = el.value;
   });
   // Signatures, only if non-empty
@@ -2207,6 +2270,24 @@ async function buildReportHTML() {
       (swmsFile ? `<div class="fname">${esc(swmsFile.name)}</div>` + pages : '')));
   }
 
+  // ---- 5b. Incidents on this sheet
+  if (incidents.length) {
+    let body = '';
+    for (const i of incidents) {
+      let photos = '';
+      for (const ref of (i.photos || [])) { const src = await resolveRef(ref); if (src) photos += `<img src="${src}" style="height:60mm;margin:2mm 2mm 0 0;border:1px solid #d7dde5">`; }
+      body += `<div class="card" style="margin-bottom:8px;border-left:5px solid ${i.severity === 'High' ? '#c0392b' : i.severity === 'Medium' ? '#e67e22' : '#6b7280'}">
+        <div><b>${esc(i.type)}</b> — ${esc(i.severity)} severity${i.occurred_at ? ' · ' + esc(i.occurred_at.slice(0, 5)) : ''}${i.location ? ' · ' + esc(i.location) : ''}</div>
+        ${i.people ? `<div class="lbl" style="margin-top:4px">People involved</div><div>${esc(i.people)}</div>` : ''}
+        <div class="lbl" style="margin-top:4px">What happened</div><div>${esc(i.description)}</div>
+        ${i.actions ? `<div class="lbl" style="margin-top:4px">Immediate actions</div><div>${esc(i.actions)}</div>` : ''}
+        <div class="lbl" style="margin-top:4px">Injury: ${esc(i.injury || '—')} · Work stopped: ${esc(i.work_stopped || '—')}</div>
+        <div class="lbl" style="margin-top:4px">Reported by ${esc(i.reported_by_name || '')} · ${i.status === 'acknowledged' ? 'Acknowledged by ' + esc(i.acknowledged_by_name || '') : i.status}</div>
+        ${photos ? `<div>${photos}</div>` : ''}</div>`;
+    }
+    out.push(section(band('Incident / Near-Miss Reports') + body));
+  }
+
   // ---- 6. Permits
   if (permitFiles.length) {
     let docs = '';
@@ -2395,6 +2476,10 @@ const ACT = {
   lockWs:            lockWorksheet,
   unlockWs:          unlockWorksheet,
   deleteWs:          deleteWorksheet,
+  sendIncident:      sendIncident,
+  removeIncPhoto:    el => { incPhotos.splice(+el.dataset.idx, 1); renderIncPhotos(); },
+  ackIncident:       el => ackIncident(el.dataset.id),
+  openIncJob:        el => openTodayWorksheet(el.dataset.job),
   toggleCrew:        () => { $('#crewPanel').classList.toggle('hidden'); $('#usersPanel').classList.add('hidden'); renderCrew(); },
   toggleUsers:       () => { $('#usersPanel').classList.toggle('hidden'); $('#crewPanel').classList.add('hidden'); loadUsers(); },
   addCrew:           addCrew,
@@ -2415,6 +2500,7 @@ document.addEventListener('click', e => {
  * follow-up based on what was edited. */
 document.addEventListener('input', e => {
   const t = e.target;
+  if (t.id?.startsWith('inc_')) return;                         // incident form: not part of the worksheet
 
   if (t.dataset.teamIdx != null) {
     const idx = +t.dataset.teamIdx;
@@ -2453,6 +2539,7 @@ document.addEventListener('change', e => {
   if (t.matches('[data-checklist]'))               paintChecklist(t);
   if (t.matches('[data-drop="swms"]'))             handleSWMSFile(t.files?.[0]);
   if (t.matches('[data-drop="perm"]'))             handlePermitFiles(t.files);
+  if (t.matches('[data-drop="inc"]'))              addIncidentPhotos(t.files);
   if (t.matches('[data-act="loadFile"]'))          loadFromFile(t);
   if (t.matches('[data-crew-active]'))             setCrewActive(t.dataset.crewActive, t.checked);
   if (t.matches('[data-user-role]'))               setUserField(t.dataset.userRole, 'role', t.value);
@@ -2467,6 +2554,7 @@ document.addEventListener('drop', e => {
   e.preventDefault(); d.classList.remove('over');
   const files = e.dataTransfer?.files; if (!files?.length) return;
   if (d.id === 'swmsDrop') handleSWMSFile(files[0]);
+  else if (d.id === 'incDrop') addIncidentPhotos(files);
   else if (d.id === 'permDrop') handlePermitFiles(files);
 });
 
@@ -2585,7 +2673,7 @@ async function loadDashboard(manual = false) {
   let jobs = null;
   if (online()) {
     const { data, error } = await sb.from('jobs')
-      .select('*, worksheets(id, ws_date, updated_at, updated_by_name, supervisor, locked, summary)')
+      .select('*, worksheets(id, ws_date, updated_at, updated_by_name, supervisor, locked, summary), incidents(id, ws_date, type, severity, status, description, reported_by_name, occurred_at, email_status, created_at)')
       .order('created_at', { ascending:false });
     if (error) { banner.textContent = 'Could not load jobs: ' + error.message; banner.classList.remove('hidden'); }
     else { jobs = data; banner.classList.add('hidden'); try { localStorage.setItem(DASH_CACHE, JSON.stringify(jobs)); } catch (e) {} }
@@ -2603,6 +2691,8 @@ async function loadDashboard(manual = false) {
   }
   jobsById = Object.fromEntries(jobs.map(j => [j.id, j]));
   renderJobs();
+  renderIncidentBanner();
+  flushIncidentQueue();
   if (manual) toast('↻ Refreshed');
 }
 
@@ -2634,7 +2724,9 @@ function renderJobs() {
     const more = ws.length > 6 ? `<span class="muted" style="font-size:12px;align-self:center">+${ws.length - 6} more</span>` : '';
     const meta = [j.client, j.location, j.vessel].filter(Boolean).map(esc).join(' · ');
     let signal = '';
-    if (!done) {
+    const openInc = (j.incidents || []).filter(i => i.status === 'open').length;
+    if (openInc) signal = `<span class="badge incident">⚠ ${openInc} OPEN INCIDENT${openInc > 1 ? 'S' : ''}</span>`;
+    else if (!done) {
       if (todayWs?.locked) signal = '<span class="badge ok">SIGNED OFF TODAY</span>';
       else if (todayWs)    signal = '<span class="badge ok">TODAY OPEN</span>';
       else if (lateMorning) signal = '<span class="badge warn">NO WORKSHEET TODAY</span>';
@@ -2841,6 +2933,165 @@ async function openWorksheet(ws, job) {
   activeTab = null; switchTab('daily');
   document.title = `${job.job_no} — Daily Worksheet ${fmtDate(ws.ws_date)}`;
   flushFiles();
+  incPhotos = []; renderIncPhotos();
+  loadIncidents();
+}
+
+/* ---- Incidents ---- */
+let incPhotos = [];          // data URLs for the form in progress
+let incidents = [];          // rows for the open worksheet
+const INC_QUEUE = 'franmarine_incident_queue';
+
+async function addIncidentPhotos(files) {
+  for (const f of files || []) {
+    if (!f.type.startsWith('image/')) continue;
+    incPhotos.push(await shrinkImage(f, 1600, 0.8));
+  }
+  renderIncPhotos();
+}
+function renderIncPhotos() {
+  const c = $('#incPhotos'); if (!c) return;
+  c.innerHTML = incPhotos.map((src, i) => `<span style="position:relative"><img src="${src}"><button class="rm" data-act="removeIncPhoto" data-idx="${i}" style="position:absolute;top:2px;right:2px">×</button></span>`).join('');
+}
+/* Camera photos are 3–8 MB; shrink before upload so they send on a weak signal */
+function shrinkImage(file, maxPx, q) {
+  return new Promise(res => {
+    const img = new Image(); const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const sc = Math.min(1, maxPx / Math.max(img.width, img.height));
+      const c = document.createElement('canvas'); c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url); res(c.toDataURL('image/jpeg', q));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); fileToDataURL(file).then(res); };
+    img.src = url;
+  });
+}
+
+function readIncidentForm() {
+  const v = id => $('#' + id)?.value?.trim() || '';
+  return { type: v('inc_type'), severity: v('inc_severity'), occurred_at: v('inc_time') || null, people: v('inc_people'), location: v('inc_location'),
+           description: v('inc_desc'), actions: v('inc_actions'), injury: v('inc_injury'), work_stopped: v('inc_workStopped') };
+}
+function clearIncidentForm() {
+  ['inc_type','inc_severity','inc_time','inc_people','inc_location','inc_desc','inc_actions','inc_injury','inc_workStopped'].forEach(id => { const el = $('#' + id); if (el) el.value = ''; });
+  incPhotos = []; renderIncPhotos();
+}
+
+async function sendIncident() {
+  if (!currentWs || !currentJob) return;
+  const f = readIncidentForm();
+  if (!f.type || !f.severity || !f.description) { alert('Type, severity and a description are required.'); return; }
+  if (!confirm(`Send this ${f.severity.toLowerCase()}-severity ${f.type.toLowerCase()} report to the ${currentJob.region} managers now?`)) return;
+  const btn = $('#sendIncBtn'); btn.disabled = true; $('#incStatus').textContent = 'Sending…';
+  const rec = { ...f, worksheet_id: currentWs.id, job_id: currentJob.id, ws_date: currentWs.ws_date,
+                reported_by_name: me.name, photos: incPhotos.slice(), queued_at: Date.now(), local_id: 'inc_' + Date.now() };
+  if (!online()) {
+    queueIncident(rec);
+    clearIncidentForm(); btn.disabled = false;
+    $('#incStatus').textContent = '📶 No signal — saved on this device and will send automatically when connected.';
+    alert('No signal. The report is saved on this device and will be sent automatically as soon as the iPad is back online.');
+    return;
+  }
+  const r = await submitIncident(rec);
+  btn.disabled = false;
+  if (r.ok) {
+    clearIncidentForm(); await loadIncidents();
+    $('#incStatus').textContent = r.emailed ? `✓ Sent to ${r.emailed} manager${r.emailed === 1 ? '' : 's'}` : '✓ Saved and flagged on the dashboard (email pending)';
+    toast('🚨 Incident reported', 2500);
+  } else {
+    queueIncident(rec);
+    $('#incStatus').textContent = '⚠ Could not reach the server — saved on this device, will retry.';
+    alert('Could not send right now (' + r.error + '). The report is saved on this device and will retry automatically.');
+  }
+}
+
+/* Insert the row, upload photos, then ask the server to email the managers */
+async function submitIncident(rec) {
+  try {
+    const { photos, queued_at, local_id, ...row } = rec;
+    const { data: inc, error } = await sb.from('incidents')
+      .insert({ ...row, reported_by: me.id, photos: [], status: 'open', email_status: 'pending' }).select('id').single();
+    if (error) throw error;
+    const paths = [];
+    for (let i = 0; i < (photos || []).length; i++) {
+      try { paths.push(await uploadRef(photos[i], `${rec.worksheet_id}/incident-${inc.id}/p${i + 1}.jpg`, 'image/jpeg')); } catch (e) { console.warn('photo upload failed', e); }
+    }
+    if (paths.length) await sb.from('incidents').update({ photos: paths }).eq('id', inc.id);
+    const n = await notifyIncident(inc.id);
+    return { ok: true, emailed: n };
+  } catch (e) { return { ok: false, error: e.message || String(e) }; }
+}
+
+async function notifyIncident(id) {
+  try {
+    const { data, error } = await sb.functions.invoke('notify-incident', { body: { incident_id: id } });
+    if (error) throw error;
+    return data?.sent_to?.length ?? 0;
+  } catch (e) { console.warn('notify failed', e); return 0; }
+}
+
+function queueIncident(rec) {
+  try { const q = JSON.parse(localStorage.getItem(INC_QUEUE) || '[]'); q.push(rec); localStorage.setItem(INC_QUEUE, JSON.stringify(q)); }
+  catch (e) { alert('Could not save the report on this device (storage full). Please report it by phone.'); }
+}
+async function flushIncidentQueue() {
+  if (!sb || !online() || !me) return;
+  let q; try { q = JSON.parse(localStorage.getItem(INC_QUEUE) || '[]'); } catch (e) { q = []; }
+  if (!q.length) return;
+  const left = [];
+  for (const rec of q) { const r = await submitIncident(rec); if (!r.ok) left.push(rec); }
+  try { localStorage.setItem(INC_QUEUE, JSON.stringify(left)); } catch (e) {}
+  if (left.length < q.length) { toast(`🚨 ${q.length - left.length} queued incident report${q.length - left.length > 1 ? 's' : ''} sent`, 3000); if (currentWs) loadIncidents(); loadDashboardQuiet(); }
+}
+async function loadDashboardQuiet() { if ($('#dashView').classList.contains('active')) await loadDashboard(); }
+
+async function loadIncidents() {
+  const c = $('#incList'); if (!c || !currentWs) return;
+  if (!online()) { c.innerHTML = '<div class="muted">Offline — reported incidents will show when connected.</div>'; return; }
+  const { data, error } = await sb.from('incidents').select('*').eq('worksheet_id', currentWs.id).order('created_at', { ascending: false });
+  if (error) { c.innerHTML = '<div class="muted">Could not load incidents.</div>'; return; }
+  incidents = data || [];
+  // retry any emails that never went out
+  for (const i of incidents) if (i.email_status === 'pending' && Date.now() - new Date(i.created_at) > 60000) notifyIncident(i.id);
+  renderIncidents();
+}
+function incCard(i, showJob = false) {
+  const job = jobsById[i.job_id];
+  return `<div class="inc-item ${i.status}">
+    <div><span class="inc-sev ${(i.severity || '').toLowerCase()}">${esc(i.severity)}</span> <b>${esc(i.type)}</b>
+      ${showJob && job ? ` — ${esc(job.job_no)} ${esc(job.project)}` : ''}
+      <span class="muted"> · ${fmtDate(i.ws_date)}${i.occurred_at ? ' ' + esc(i.occurred_at.slice(0, 5)) : ''}</span></div>
+    <div style="margin-top:4px">${esc(i.description)}</div>
+    ${i.actions ? `<div class="meta"><b>Actions:</b> ${esc(i.actions)}</div>` : ''}
+    <div class="meta">Reported by ${esc(i.reported_by_name || '')} · ${i.status === 'open' ? '<b style="color:var(--bad)">Open</b>' : i.status === 'acknowledged' ? `<b style="color:var(--ok)">Acknowledged</b> by ${esc(i.acknowledged_by_name || '')}` : 'Closed'}
+      · email ${i.email_status === 'sent' ? 'sent' : i.email_status === 'failed' ? '<b style="color:var(--bad)">failed</b>' : 'pending'}</div>
+    ${(i.photos || []).length ? `<div class="inc-photos">${i.photos.map(p => `<img data-ref="${esc(p)}" class="pending" alt="">`).join('')}</div>` : ''}
+    ${isManager() && i.status === 'open' ? `<div class="mt"><button class="btn sm" data-act="ackIncident" data-id="${i.id}">✓ Acknowledge</button></div>` : ''}
+  </div>`;
+}
+function renderIncidents() {
+  const c = $('#incList'); if (!c) return;
+  c.innerHTML = incidents.length ? incidents.map(i => incCard(i)).join('') : '<div class="muted">None reported.</div>';
+  hydrateImages(c);
+  const n = incidents.filter(i => i.status === 'open').length;
+  $('#navInc')?.classList.toggle('alert', n > 0); $('#pillInc')?.classList.toggle('alert', n > 0);
+}
+function renderIncidentBanner() {
+  const b = $('#incBanner'); if (!b) return;
+  const open = Object.values(jobsById).flatMap(j => (j.incidents || []).filter(i => i.status === 'open'));
+  b.classList.toggle('hidden', !open.length);
+  if (!open.length) return;
+  b.innerHTML = `<b>⚠ ${open.length} open incident${open.length > 1 ? 's' : ''}</b> in ${viewRegion}${isManager() ? ' — acknowledge once you have followed up.' : '.'}` +
+    open.sort((a, b2) => (b2.created_at || '').localeCompare(a.created_at || '')).map(i => incCard(i, true)).join('');
+  hydrateImages(b);
+}
+async function ackIncident(id) {
+  if (!isManager()) return;
+  const { error } = await sb.from('incidents').update({ status: 'acknowledged', acknowledged_by: me.id, acknowledged_by_name: me.name, acknowledged_at: new Date().toISOString() }).eq('id', id);
+  if (error) { toast('✗ ' + error.message, 2500); return; }
+  toast('✓ Acknowledged');
+  if (currentWs) await loadIncidents(); else await loadDashboard();
 }
 
 /* ---- Sign-off ---- */
@@ -3143,7 +3394,7 @@ document.addEventListener('visibilitychange', async () => {
     }
   } catch (e) {}
 });
-window.addEventListener('online',  () => { if (currentWs) { setSync('saving'); pushWorksheet(); flushFiles(); } flushPending(); });
+window.addEventListener('online',  () => { if (currentWs) { setSync('saving'); pushWorksheet(); flushFiles(); } flushPending(); flushIncidentQueue(); });
 window.addEventListener('offline', () => { if (currentWs) setSync('offline'); });
 
 /* === 24. Init ==================================================== */
