@@ -37,7 +37,9 @@ Deno.serve(async (req) => {
 
     const region = inc.jobs?.region;
     const { data: mgrs } = await admin.from("profiles").select("email, full_name").eq("role", "manager").eq("region", region);
-    const to = (mgrs ?? []).map((m) => m.email).filter(Boolean);
+    // Region managers + HSEQ (HSEQ_TO secret, default Belinda)
+    const hseq = (Deno.env.get("HSEQ_TO") ?? "belinda.brooks@franmarine.com.au").split(",").map((s) => s.trim()).filter(Boolean);
+    const to = [...new Set([...(mgrs ?? []).map((m) => m.email).filter(Boolean), ...hseq])];
     if (!to.length) {
       await admin.from("incidents").update({ email_status: "failed", email_error: `no managers in ${region}` }).eq("id", incident_id);
       return json({ sent_to: [], error: `no managers in ${region}` });
@@ -70,7 +72,7 @@ Deno.serve(async (req) => {
       ${row("Photos", (inc.photos ?? []).length ? `${inc.photos.length} — see attached PDF` : "")}
     </table>
     ${appUrl ? `<p style="margin-top:18px"><a href="${appUrl}" style="background:#002060;color:#fff;text-decoration:none;padding:10px 16px;border-radius:6px;font-weight:600">Open the Daily Worksheet</a></p>` : ""}
-    <p style="color:#6b7280;font-size:12px;margin-top:18px">Please acknowledge the incident on the dashboard once you have followed up. This email was sent automatically to the ${esc(region)} managers.</p>
+    <p style="color:#6b7280;font-size:12px;margin-top:18px">Please acknowledge the incident on the dashboard once you have followed up. This email was sent automatically to the ${esc(region)} managers and HSEQ.</p>
   </div>
 </div>`;
     const text = `${sev.toUpperCase()} — ${inc.type}\n${inc.jobs?.job_no} ${inc.jobs?.project} — ${date}\n\nReported by: ${inc.reported_by_name}\nPeople: ${inc.people ?? ""}\nWhere: ${inc.location ?? ""}\n\nWhat happened:\n${inc.description}\n\nImmediate actions:\n${inc.actions ?? ""}\n\nInjury: ${inc.injury ?? ""}   Work stopped: ${inc.work_stopped ?? ""}\n\n${appUrl}`;
