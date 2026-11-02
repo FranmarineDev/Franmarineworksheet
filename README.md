@@ -38,7 +38,7 @@ const SUPABASE_ANON_KEY = 'eyJ...';
 The anon key is safe to publish — row-level security means nothing is readable without a login.
 
 ### 3. Users and roles
-Managers add people from inside the app: **🔑 Users → Invite a new person** (name, email, role, region). That calls the `invite-user` Edge Function, which creates the account and sends Supabase's *Invite user* email with a link to the app's set-password screen. **✉ Send link** on a row re-sends a set-password link (the *Reset Password* email) to someone who already has an account. Deploy the function once (`supabase functions deploy invite-user`, or paste it in Edge Functions → Deploy new function in the dashboard) and set the `APP_URL` secret to the Pages address.
+Managers add people from inside the app: **🔑 Users → Invite a new person** (name, email, role, region). That calls the `invite-user` Edge Function, which creates the account and sends Supabase's *Invite user* email with a link to the app's set-password screen. **✉ Send link** on a row re-sends a set-password link (the *Reset Password* email) to someone who already has an account; **🗑** removes the account (`remove-user` Edge Function — same region only, never yourself; their sheets are kept). Deploy the function once (`supabase functions deploy invite-user`, or paste it in Edge Functions → Deploy new function in the dashboard) and set the `APP_URL` secret to the Pages address.
 
 Manual fallback: **Authentication → Users → Add user → Create new user** (email + starting password, tick **Auto Confirm User**).
 - The **first** user created becomes a **manager** automatically; everyone after is a **supervisor**.
@@ -60,7 +60,7 @@ select * from diver_hours where ws_date >= '2026-11-01' order by diver, ws_date;
 `worksheets.summary` holds each day's compact figures; `worksheets.data` is the full sheet as JSON.
 
 ## Emails (Edge Functions)
-Three functions send mail through `no-reply@franmarine.com.au` (secrets `SMTP_HOST/PORT/USER/PASS/FROM`, `APP_URL`); a fourth, `invite-user`, creates accounts and sends Supabase's own invite email (needs only `APP_URL`):
+Three functions send mail through `no-reply@franmarine.com.au` (secrets `SMTP_HOST/PORT/USER/PASS/FROM`, `APP_URL`); `invite-user` creates accounts and sends Supabase's own invite email (needs only `APP_URL`), and `remove-user` deletes an account:
 - `notify-incident` → the job region's managers + HSEQ (`HSEQ_TO`, default Belinda), incident PDF attached.
 - `send-drill-report` → `DRILL_TO` (default Belinda), cc region managers, drill PDF attached.
 - `send-closeout-report` → region managers (optional `CLOSEOUT_CC`), day close-out PDF attached. Sent from the **Close-Out** tab.

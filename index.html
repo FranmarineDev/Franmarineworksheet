@@ -124,10 +124,10 @@ img.pending{min-height:80px;background:repeating-linear-gradient(45deg,#f4f6fa,#
 .seg button{border:none;background:#fff;padding:7px 16px;font:inherit;font-size:13px;font-weight:600;color:var(--navy);cursor:pointer;min-height:36px}
 .seg button+button{border-left:1px solid var(--border-2)}
 .seg button.active{background:var(--navy);color:#fff}
-.user-row{display:grid;grid-template-columns:1fr 1fr 130px 90px 96px;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)}
+.user-row{display:grid;grid-template-columns:1fr 1fr 130px 90px 96px 36px;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)}
 .user-row.head{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px}
 .user-row select{min-height:34px;padding:4px 8px}
-@media(max-width:600px){ .user-row{grid-template-columns:1fr 110px 80px 44px;font-size:13px} .user-row .em{display:none} .user-row .btn.sm .lbl{display:none} .user-row #inv_email{display:block;grid-column:1/-1} }
+@media(max-width:600px){ .user-row{grid-template-columns:1fr 110px 80px 44px 36px;font-size:13px} .user-row .em{display:none} .user-row .btn.sm .lbl{display:none} .user-row #inv_email{display:block;grid-column:1/-1} }
 
 /* Incidents */
 .inc-sev{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;color:#fff;background:var(--warn)}
@@ -599,7 +599,7 @@ img{max-width:100%;height:auto}
     </div>
     <div class="sec hidden" id="usersPanel">
       <h2>Users <span class="muted" style="text-transform:none;font-weight:400">People only see their own region's jobs, crew and worksheets. New accounts start in NSW — move them here if they belong in WA.</span></h2>
-      <div class="user-row head"><span>Name</span><span class="em">Email</span><span>Role</span><span>Region</span><span>Link</span></div>
+      <div class="user-row head"><span>Name</span><span class="em">Email</span><span>Role</span><span>Region</span><span>Link</span><span></span></div>
       <div id="userRows"></div>
       <div class="mt" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <button class="btn sm" data-act="sendLinkAll" id="sendLinkAllBtn">✉ Send new-link email to everyone listed</button>
@@ -613,6 +613,7 @@ img{max-width:100%;height:auto}
         <select id="inv_role"><option value="supervisor">Supervisor</option><option value="manager">Manager</option></select>
         <select id="inv_region"><option>NSW</option><option>WA</option></select>
         <button class="btn sm" data-act="inviteUser" id="inviteBtn" title="Create the account and email an invite">+ Invite</button>
+        <span></span>
       </div>
       <div class="muted">They get an email with a link to this address to choose a password; the account appears above once sent. Wording: Supabase → Email Templates → <i>Invite user</i>.</div>
       <div class="login-err" id="usersErr"></div>
@@ -2904,6 +2905,7 @@ const ACT = {
   toggleCrew:        () => { $('#crewPanel').classList.toggle('hidden'); $('#usersPanel').classList.add('hidden'); renderCrew(); },
   toggleUsers:       () => { $('#usersPanel').classList.toggle('hidden'); $('#crewPanel').classList.add('hidden'); if (me?.region) $('#inv_region').value = me.region; loadUsers(); },
   inviteUser:        inviteUser,
+  removeUser:        el => removeUser(el.dataset.id),
   sendLinkOne:       el => { const u = usersList.find(x => x.id === el.dataset.id); if (u && confirm(`Email ${u.email} a link to this address (choose password + open app)?`)) sendLinkTo([u]); },
   sendLinkAll:       () => { const list = usersList.filter(u => (u.region || 'NSW') === me.region && u.email); if (list.length && confirm(`Email all ${list.length} ${me.region} users a link to this address?\n\nThe wording comes from the Supabase "Reset Password" email template — check it says what you want first.`)) sendLinkTo(list); },
   addCrew:           addCrew,
@@ -4134,6 +4136,7 @@ function renderUsers() {
         <option ${u.region === 'WA' ? 'selected' : ''}>WA</option>
       </select>
       <button class="btn sm ghost" data-act="sendLinkOne" data-id="${u.id}" ${u.email ? '' : 'disabled'} title="Email ${esc(u.email || '')} a link to this address (set password + open app)">✉ <span class="lbl">Send link</span></button>
+      <button class="btn sm ghost" data-act="removeUser" data-id="${u.id}" ${u.id === me.id ? 'disabled title="You can\'t remove yourself"' : 'title="Remove this account"'} style="color:#b42318">🗑</button>
     </div>`).join('') || '<div class="muted" style="padding:8px 0">No users yet.</div>';
 }
 
@@ -4176,6 +4179,19 @@ async function inviteUser() {
     toast(`✓ Invite sent to ${email}`, 2000);
     await loadUsers();
   } finally { btn.disabled = false; }
+}
+async function removeUser(id) {
+  const u = usersList.find(x => x.id === id); if (!u) return;
+  if (!online()) { $('#usersErr').textContent = 'Offline — removing needs a connection.'; return; }
+  const who = u.full_name || u.email;
+  if (!confirm(`Remove ${who} (${u.email})?\n\nThey will no longer be able to sign in. Worksheets and reports they filled in are kept.`)) return;
+  if (prompt(`Type REMOVE to confirm removing ${who}:`) !== 'REMOVE') return;
+  $('#usersErr').textContent = '';
+  const { data, error } = await sb.functions.invoke('remove-user', { body: { user_id: id } });
+  const msg = error ? (await error.context?.json?.().catch(() => null))?.error || error.message : data?.error;
+  if (msg) { $('#usersErr').textContent = msg; return; }
+  toast(`✓ Removed ${who}`, 2000);
+  await loadUsers();
 }
 async function setUserField(id, field, value) {
   if (field === 'region' && value !== me.region) {
