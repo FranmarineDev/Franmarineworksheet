@@ -70,6 +70,22 @@ update public.crew set region = 'NSW' where region is null;
 alter table public.crew alter column region set default 'NSW';
 alter table public.crew alter column region set not null;
 
+-- ---------- Equipment / fleet list (offered in "Equipment Used Onsite") ----------
+create table if not exists public.equipment (
+  id         uuid primary key default gen_random_uuid(),
+  name       text not null,
+  category   text,
+  region     text not null default 'NSW' check (region in ('NSW', 'WA')),
+  active     boolean not null default true,
+  created_at timestamptz not null default now()
+);
+alter table public.equipment enable row level security;
+drop policy if exists "equipment: read"           on public.equipment;
+drop policy if exists "equipment: managers write" on public.equipment;
+create policy "equipment: read"           on public.equipment for select to authenticated using (public.can_see_region(region));
+create policy "equipment: managers write" on public.equipment for all    to authenticated
+  using (public.is_manager() and public.can_see_region(region)) with check (public.is_manager() and public.can_see_region(region));
+
 -- ---------- Jobs ----------
 create table if not exists public.jobs (
   id          uuid primary key default gen_random_uuid(),
@@ -234,6 +250,29 @@ drop policy if exists "drill_reports: read"   on public.drill_reports;
 drop policy if exists "drill_reports: insert" on public.drill_reports;
 create policy "drill_reports: read"   on public.drill_reports for select to authenticated using (public.can_see_job(job_id));
 create policy "drill_reports: insert" on public.drill_reports for insert to authenticated with check (public.can_see_job(job_id));
+
+-- ---------- Day close-out reports emailed to the region's managers (send-closeout-report function) ----------
+create table if not exists public.closeout_reports (
+  id            uuid primary key default gen_random_uuid(),
+  worksheet_id  uuid references public.worksheets (id) on delete set null,
+  job_id        uuid not null references public.jobs (id) on delete cascade,
+  ws_date       date not null,
+  pdf_path      text not null,
+  file_name     text,
+  summary_text  text,
+  sent_by       uuid references public.profiles (id),
+  sent_by_name  text,
+  email_status  text not null default 'pending' check (email_status in ('pending', 'sent', 'failed')),
+  email_error   text,
+  emailed_to    text[],
+  emailed_at    timestamptz,
+  created_at    timestamptz not null default now()
+);
+alter table public.closeout_reports enable row level security;
+drop policy if exists "closeout_reports: read"   on public.closeout_reports;
+drop policy if exists "closeout_reports: insert" on public.closeout_reports;
+create policy "closeout_reports: read"   on public.closeout_reports for select to authenticated using (public.can_see_job(job_id));
+create policy "closeout_reports: insert" on public.closeout_reports for insert to authenticated with check (public.can_see_job(job_id));
 
 -- ---------- Storage bucket for SWMS / permit files ----------
 insert into storage.buckets (id, name, public, file_size_limit)

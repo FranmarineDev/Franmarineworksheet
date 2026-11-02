@@ -14,6 +14,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.4/dist/umd/supabase.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" defer></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
 <style>
 /* =================================================================
    THEME
@@ -142,6 +143,24 @@ img.pending{min-height:80px;background:repeating-linear-gradient(45deg,#f4f6fa,#
 .nav.alert,.pill.alert{color:var(--bad);font-weight:700}
 .btn.send{background:var(--bad);border-color:var(--bad);font-weight:700}
 .btn.send:disabled{opacity:.6;cursor:wait}
+
+/* QR codes, equipment, dive permit, close-out */
+.qr-row{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:12px}
+.qr-fig{margin:0;text-align:center;font-size:11px;color:var(--muted);width:120px}
+.qr-fig img{width:120px;height:120px;border:1px solid var(--border);border-radius:6px;background:#fff;object-fit:contain}
+.equip-row{display:grid;grid-template-columns:1fr 1fr 44px;gap:8px;margin-bottom:6px;align-items:center}
+.diver-checks{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:0 0 10px;padding:8px 10px;background:var(--bg);border-radius:6px}
+.diver-checks label.f>span{font-size:10px}
+.diver-checks select{min-height:30px;padding:3px 6px;font-size:13px}
+.dp-table td:first-child{width:46%}
+.dp-table input[type=checkbox]{width:20px;height:20px;min-height:0}
+.dp-sign{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+.dp-sign .sig-row{grid-template-columns:1fr auto}
+.siren{background:#fdecea;border:1px solid #f5b7b1;color:#7b1e1e;padding:8px 12px;border-radius:6px;font-size:13px;margin-bottom:10px}
+.summary-box{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-size:13px;white-space:pre-wrap;font-family:ui-monospace,Menlo,monospace;max-height:260px;overflow:auto}
+.issues{background:#fff8e6;border:1px solid #f0d58a;border-radius:6px;padding:8px 12px;font-size:13px;margin-top:8px}
+.ws-chip .miss{display:inline-block;background:var(--warn);color:#fff;font-size:10px;border-radius:8px;padding:0 5px;margin-left:4px}
+@media(max-width:600px){ .diver-checks{grid-template-columns:repeat(2,1fr)} .dp-sign{grid-template-columns:1fr} .equip-row{grid-template-columns:1fr 1fr 40px} }
 
 /* Sync pill (worksheet header) */
 .sync{display:inline-flex;align-items:center;gap:6px;font-size:11px;opacity:.9;white-space:nowrap}
@@ -558,6 +577,8 @@ img{max-width:100%;height:auto}
       <label><input type="checkbox" id="showDone"> Show completed</label>
       <button class="btn ghost mgr-only" data-act="toggleUsers">🔑 Users</button>
       <button class="btn ghost mgr-only" data-act="toggleCrew">👥 Crew</button>
+      <button class="btn ghost mgr-only" data-act="toggleEquip">🛠 Equipment</button>
+      <label class="btn ghost mgr-only" style="cursor:pointer">📥 Import jobs<input type="file" accept=".xlsx,.xls,.csv" hidden id="importJobsFile"></label>
       <button class="btn mgr-only" data-act="newJob">+ New Job</button>
     </div>
     <div class="sec hidden" id="usersPanel">
@@ -580,6 +601,20 @@ img{max-width:100%;height:auto}
       </div>
       <datalist id="positionList"><option>Dive Supervisor</option><option>Diver</option><option>Trainee Diver</option><option>Workshop</option><option>Skipper</option><option>ROV Pilot</option></datalist>
       <div class="login-err" id="crewErr"></div>
+    </div>
+    <div class="sec hidden" id="equipPanel">
+      <h2>Equipment list <span class="muted" style="text-transform:none;font-weight:400">Fleet and plant offered in "Equipment Used Onsite" — shared across the region</span></h2>
+      <div class="crew-row head"><span>Item</span><span>Category</span><span>Region</span><span>Active</span><span></span></div>
+      <div id="equipRowsAdmin"></div>
+      <div class="crew-row" style="border-bottom:none">
+        <input id="ef_name" placeholder="e.g. Dive System 2 / Hilux ABC-123 / Integrity III">
+        <input id="ef_category" placeholder="Category" list="equipCatList">
+        <select id="ef_region" disabled><option>NSW</option><option>WA</option></select>
+        <span></span>
+        <button class="btn sm" data-act="addEquip" title="Add">+</button>
+      </div>
+      <datalist id="equipCatList"><option>Dive system</option><option>Compressor</option><option>Vehicle</option><option>Vessel</option><option>ROV</option><option>Trailer</option><option>Tooling</option><option>Other</option></datalist>
+      <div class="login-err" id="equipErr"></div>
     </div>
     <div class="sec hidden" id="summaryPanel">
       <h2 id="summaryTitle">Job summary <button class="btn sm ghost" data-act="closeSummary">Close</button></h2>
@@ -639,8 +674,9 @@ img{max-width:100%;height:auto}
     <button class="nav" data-tab="dive" id="navDive">🤿 Diving Log</button>
     <button class="nav" data-tab="tb">🧰 Toolbox Meeting</button>
     <button class="nav" data-tab="swms">📄 SWMS Sign-Off</button>
-    <button class="nav" data-tab="ed">🚨 Emergency Drill</button>
+    <button class="nav" data-tab="ed" id="navDrill">🚨 Emergency Drill</button>
     <button class="nav" data-tab="perm">🗂 Permits</button>
+    <button class="nav" data-tab="co" id="navCo">🏁 Day Close-Out</button>
     <button class="nav" data-tab="inc" id="navInc">⚠️ Incident</button>
   </aside>
   <div>
@@ -649,8 +685,9 @@ img{max-width:100%;height:auto}
       <button class="pill" data-tab="dive" id="pillDive">Diving</button>
       <button class="pill" data-tab="tb">Toolbox</button>
       <button class="pill" data-tab="swms">SWMS</button>
-      <button class="pill" data-tab="ed">Drill</button>
+      <button class="pill" data-tab="ed" id="pillDrill">Drill</button>
       <button class="pill" data-tab="perm">Permits</button>
+      <button class="pill" data-tab="co" id="pillCo">Close-Out</button>
       <button class="pill" data-tab="inc" id="pillInc">Incident</button>
     </div>
     <div class="lock-banner hidden" id="lockBanner"></div>
@@ -684,6 +721,7 @@ img{max-width:100%;height:auto}
 <datalist id="diverReviewList"></datalist>
 <datalist id="byWhomList"></datalist>
 <datalist id="crewList"></datalist>
+<datalist id="equipList"></datalist>
 </div><!-- /appView -->
 
 <script>
@@ -788,6 +826,8 @@ let divingMode   = true;
 let activeTab    = 'daily';
 let swmsFile     = null;        // { name, pages:[dataURL] }
 let permitFiles  = [];          // [{ id, name, kind, pages|data }]
+let equipmentRows = [];         // [{ item, notes }] — equipment used onsite
+let equipmentList = [];         // rows from the equipment table (fleet list)
 let saveTimer    = null;
 let currentWs    = null;        // { id, job_id, ws_date, version }
 let currentJob   = null;        // job row from Supabase
@@ -858,11 +898,17 @@ function pageDaily() {
     <div class="sec">
       <h2>Project Description</h2>
       <div class="g3">${projGrid('da')}</div>
-      <div class="g3 mt">
-        ${F('da_startWorkshop','Started at Workshop', { type:'time' })}
-        ${F('da_arrivedOnsite','Arrived Onsite',      { type:'time' })}
-        ${F('da_departedSite', 'Departed Site',       { type:'time' })}
+      <div class="g4 mt">
+        ${F('da_startWorkshop',   'Start Day',          { type:'time' })}
+        ${F('da_departedWorkshop','Departed Workshop',  { type:'time' })}
+        ${F('da_arrivedOnsite',   'Arrived Onsite',     { type:'time' })}
+        ${F('da_jobCompleted',    'Job Completed',      { type:'time' })}
+        ${F('da_departedSite',    'Departed Site',      { type:'time' })}
+        ${F('da_arrivedWorkshop', 'Arrived Workshop',   { type:'time' })}
+        ${F('da_finishDay',       'Finished Day',       { type:'time' })}
+        ${S('da_drillRequired',   'Emergency Drill Required?', ['Yes', 'No'])}
       </div>
+      <div class="muted" style="margin-top:4px">Start Day → Finished Day are used by accounts for payroll and appear as the first and last rows of the activity log.</div>
       <div class="mt">
         ${TA('da_projDesc','Day-to-day project notes', 3,
             { pl:'Write the day to day project details here…' })}
@@ -881,6 +927,14 @@ function pageDaily() {
       </h2>
       <div id="teamList_ui"></div>
       <div class="muted mt">Names here drive all sign-on sections and diver name suggestions.</div>
+    </div>
+
+    <div class="sec">
+      <h2>Equipment Used Onsite
+        <button class="btn sm ghost" data-act="addEquipRow">+ Add Equipment</button>
+      </h2>
+      <div id="equipRows"></div>
+      <div class="muted mt">Pick from the fleet list or type anything. Printed on the PDF and feeds the cost tracker.</div>
     </div>
 
     <div class="sec">
@@ -934,6 +988,7 @@ function pageDive() {
 
     <div class="sec">
       <h2>Pre-Dive Checks</h2>
+      <div id="qrRow"></div>
       <div class="g3">${preDive}</div>
     </div>
 
@@ -1119,6 +1174,49 @@ function pageDrill() {
   </section>`;
 }
 
+const DIVER_CHECKS = [['comms', 'Comms check'], ['cctv', 'CCTV check'], ['harness', 'Harness check'], ['bailout', 'Bail-out secure'], ['freeflow', 'Free-flow check'], ['purge', 'Purge check']];
+const DP_ISO_ROWS = ['Sea suctions and discharges', 'Emergency fire pumps', 'Shaft(s) and thrusters', 'Bow thrusters', 'Rudder and steering gear', 'Cathodic protection system (ICCP)',
+  'Marine growth protection system (MGPS)', 'Sonar / echo sounder / transducers', 'APUs / stabiliser fins', 'Emergency diesels: generator in manual mode', 'Anchor winches and auxiliary equipment',
+  'No scheduled barge or vessel movements', 'No crane operations over the dive site', 'Hoist Flag Alpha'];
+const PAY_TIMES = [['da_startWorkshop', 'Start Day'], ['da_departedWorkshop', 'Departed Workshop'], ['da_arrivedOnsite', 'Arrived Onsite'], ['da_jobCompleted', 'Job Completed'],
+  ['da_departedSite', 'Departed Site'], ['da_arrivedWorkshop', 'Arrived Workshop'], ['da_finishDay', 'Finished Day']];
+const QR_PRESTART = {
+  NSW: [{ name: 'Bandmask 28 — pre-dive checks', src: 'qr/nsw-bandmask-28.png' }, { name: 'KM 37 — pre-dive checks', src: 'qr/nsw-km-37.png' }],
+  WA:  [{ name: 'KMB 18 / 28 — pre-dive checks', src: 'qr/wa-kmb-18-28.png' }, { name: 'KM 27 / 37 — pre-dive checks', src: 'qr/wa-km-27-37.png' }, { name: 'Aga — pre-dive checks', src: 'qr/wa-aga.png' }]
+};
+const dpSignBlock = (id, label) => `<div>
+    <div class="g2">${F(id + 'Name', 'Name')}${F(id + 'Time', 'Time', { type:'time' })}</div>
+    <div class="sig-row mt"><span class="sig-name">${esc(label)}</span><canvas data-sig="${id}Sig"></canvas><button class="link" data-act="clearSig" data-sig-id="${id}Sig">Clear</button></div>
+  </div>`;
+
+function pageCloseout() {
+  return `
+  <section class="page" id="page-co" data-tab="co">
+    <h1>🏁 Day Close-Out</h1>
+    <div class="sec">
+      <h2>End-of-day summary <span class="muted" style="text-transform:none;font-weight:400">Three short notes — these go to the ${esc(currentJob?.region || '')} managers and into the daily report</span></h2>
+      ${TA('co_progress', 'Progress made today *', 3, { pl:'What was achieved — scope completed, items inspected, metres cleaned…' })}
+      <div class="mt">${TA('co_challenges', 'Challenges faced *', 3, { pl:'Delays, weather, access, equipment, client issues — and what it cost in time' })}</div>
+      <div class="mt">${TA('co_improvements', 'Improvement suggestions *', 2, { pl:'What would make tomorrow smoother' })}</div>
+      <div class="mt">${TA('co_tomorrow', 'Plan for tomorrow', 2, { pl:'Optional' })}</div>
+    </div>
+    <div class="sec">
+      <h2>Auto summary <span class="muted" style="text-transform:none;font-weight:400">Built from the sheet — refreshes as you type</span></h2>
+      <div class="summary-box" id="coSummary"></div>
+      <div id="coIssues"></div>
+    </div>
+    <div class="sec">
+      <h2>Send close-out</h2>
+      <div class="flex" style="gap:12px;align-items:center;flex-wrap:wrap">
+        <button class="btn" data-act="sendCloseout" id="sendCoBtn">📧 Email close-out to managers</button>
+        <button class="btn ghost" data-act="copyCloseout">📋 Copy summary text</button>
+        <span class="muted" id="coStatus"></span>
+      </div>
+      <div id="coSent" class="mt"></div>
+    </div>
+  </section>`;
+}
+
 const INC_TYPES = ['Near miss', 'Injury / illness', 'Equipment failure', 'Environmental (spill / release)', 'Property / vessel damage', 'Security / access', 'Other'];
 
 function pageIncident() {
@@ -1175,6 +1273,44 @@ function pagePermits() {
     </div>
 
     <div class="sec">
+      <h2>Dive Permit &amp; Isolations <span class="muted" style="text-transform:none;font-weight:400">Digital permit-to-dive — fill in when the client has no paper permit, or alongside it</span></h2>
+      <details id="dpDetails">
+        <summary class="link" style="font-size:14px;padding:6px 0">Open / close the dive permit form</summary>
+        <div class="siren">⚠ Diving must not commence until all isolations are tagged, verified by the Dive Supervisor and the permit is signed by the Master / Chief Engineer and the Dive Supervisor.</div>
+        <div class="g4">
+          ${F('dp_permitNo', 'Permit No.')}
+          ${F('dp_clientRep', 'Client Representative')}
+          ${F('dp_ptwNo', 'Vessel / Facility PTW No.')}
+          ${F('dp_isoPermitNo', 'Isolation Permit No.')}
+        </div>
+        <div class="mt">${TA('dp_work', 'Work Description & Location', 2)}</div>
+        <h2 class="mt">Isolations</h2>
+        <div class="tbl-scroll"><table class="dp-table">
+          <thead><tr><th>Isolation</th><th style="width:80px">Exempt</th><th>Initial if tagged (Engineer / Master)</th><th>Tag verified (Dive Supervisor)</th></tr></thead>
+          <tbody>${DP_ISO_ROWS.map((r, i) => `<tr><td>${esc(r)}</td><td style="text-align:center"><input type="checkbox" id="dp_iso_${i}_exempt"></td><td><input id="dp_iso_${i}_tagged" placeholder="Initials"></td><td><input id="dp_iso_${i}_verified" placeholder="Initials"></td></tr>`).join('')}</tbody>
+        </table></div>
+        <h2 class="mt">Equipment Exemptions</h2>
+        <div class="tbl-scroll"><table>
+          <thead><tr><th>Equipment exempt from isolation</th><th>Location / reason</th></tr></thead>
+          <tbody>${[0,1,2,3].map(i => `<tr><td><input id="dp_ex_${i}_desc"></td><td><input id="dp_ex_${i}_loc"></td></tr>`).join('')}</tbody>
+        </table></div>
+        <div class="mt">${TA('dp_simops', 'SIMOPS & Communication arrangements', 2, { pl:'Other work on the vessel/wharf, comms channel, who to call…' })}</div>
+        <div class="g3 mt">
+          ${S('dp_validity', 'Validity', ['12 hours', '24 hours'])}
+          ${F('dp_expireTime', 'Expires at', { type:'time' })}
+          ${F('dp_expireDate', 'Expiry date', { type:'date' })}
+        </div>
+        <h2 class="mt">Authorisation</h2>
+        <div class="dp-sign">
+          ${dpSignBlock('dp_eng', 'Master / Chief Engineer — isolations in place')}
+          ${dpSignBlock('dp_sup', 'Dive Supervisor — permit approved')}
+          ${dpSignBlock('dp_isoRemoved', 'Isolations removed (Engineer / Master)')}
+          ${dpSignBlock('dp_complete', 'Diving operation completed — site cleaned & locks removed (Dive Supervisor)')}
+        </div>
+      </details>
+    </div>
+
+    <div class="sec">
       <h2>Permit Documents
         <button class="btn sm ghost" data-act="removeAllPermits">Remove All</button>
       </h2>
@@ -1194,7 +1330,10 @@ function pagePermits() {
 
 function renderAll() {
   $('#root').innerHTML =
-    pageDaily() + pageDive() + pageToolbox() + pageSWMS() + pageDrill() + pagePermits() + pageIncident();
+    pageDaily() + pageDive() + pageToolbox() + pageSWMS() + pageDrill() + pagePermits() + pageCloseout() + pageIncident();
+  $$('canvas[data-sig]').forEach(initSig);           // standalone signature canvases (authorisation, dive permit)
+  renderEquipUI();
+  renderQR();
   $('#siList').innerHTML = SI_BANDS.map(b => `<option>${b}</option>`).join('');
   $('#byWhomList').innerHTML = BY_WHOM_OPTIONS.map(o => `<option>${o}</option>`).join('');
   renderTeamUI();
@@ -1349,6 +1488,61 @@ function removeTeamMember(i) {
   scheduleSave();
 }
 
+
+/* === 9b. Equipment used onsite =================================== */
+
+function renderEquipUI() {
+  const c = $('#equipRows'); if (!c) return;
+  c.innerHTML = equipmentRows.length ? equipmentRows.map((r, i) => `
+    <div class="equip-row">
+      <input list="equipList" placeholder="Equipment / plant / vessel" value="${esc(r.item)}" data-equip-idx="${i}" data-equip-field="item">
+      <input placeholder="Notes (hours, serial, issues)" value="${esc(r.notes)}" data-equip-idx="${i}" data-equip-field="notes">
+      <button class="x" data-act="removeEquipRow" data-idx="${i}" title="Remove">×</button>
+    </div>`).join('') : '<div class="muted">No equipment recorded yet.</div>';
+}
+function renderEquipDatalist() {
+  const region = currentJob?.region || viewRegion;
+  $('#equipList').innerHTML = equipmentList.filter(e => e.active !== false && (!e.region || e.region === region))
+    .map(e => `<option value="${esc(e.name)}">${esc(e.category || '')}</option>`).join('');
+}
+function renderQR() {
+  const c = $('#qrRow'); if (!c) return;
+  const list = QR_PRESTART[currentJob?.region || currentRegion()] || [];
+  c.innerHTML = list.length ? `<div class="qr-row">${list.map(q => `<figure class="qr-fig"><img src="${q.src}" alt="${esc(q.name)}" loading="lazy"><figcaption>${esc(q.name)}</figcaption></figure>`).join('')}</div>
+    <div class="muted mb">Scan for the helmet pre-start procedure, then complete the checks below and per diver.</div>` : '';
+}
+
+/* Supervisor goes on the roster automatically (appended so existing signatures keep their slots) */
+function pinSupervisorToRoster(name) {
+  if (!name || teamMembers.some(n => n.trim().toLowerCase() === name.toLowerCase())) return;
+  addTeamMember(name);
+}
+
+/* Pinned payroll time rows in the activity log */
+function syncTimesToActivity() {
+  $$('#activityBody .auto-time-row').forEach(tr => tr.remove());
+  const body = $('#activityBody'); if (!body) return;
+  for (const [id, label] of PAY_TIMES) {
+    const t = $('#' + id)?.value; if (!t) continue;
+    const key = 'time_' + id;
+    const tr = h('tr', { class: 'auto-row auto-time-row', 'data-key': key });
+    tr.innerHTML = `<td style="border-left-color:#002060"><input type="time" value="${t}" readonly></td>
+      <td><input type="text" value="${esc(autoRowEdits[key] ?? label.toUpperCase())}" data-auto-edit="${key}"></td>`;
+    body.appendChild(tr);
+  }
+  sortActivityLog();
+}
+
+/* Emergency drill tab only shows when the day says a drill is required (or drill data exists) */
+function applyDrillRequired() {
+  const sel = $('#da_drillRequired'); if (!sel) return;
+  const hasData = !!($('#ed_type')?.value || $('#ed_step_0_time')?.value || $('#ed_step_0_desc')?.value);
+  if (!sel.value && hasData) sel.value = 'Yes';
+  const show = sel.value !== 'No';
+  $('#navDrill')?.style && ($('#navDrill').style.display = show ? '' : 'none');
+  $('#pillDrill')?.style && ($('#pillDrill').style.display = show ? '' : 'none');
+  if (!show && activeTab === 'ed') switchTab('daily');
+}
 
 /* === 10. Signatures ============================================== */
 /* refreshAllSigns is idempotent: it preserves existing canvases when
@@ -1505,6 +1699,7 @@ function renderDivers() {
           ${F('diver_' + i + '_name', 'Diver Name', { list:'teamList' })}
           <button class="btn sm" data-act="addSubDive" data-diver="${i}">+ Add Dive</button>
         </div>
+        <div class="diver-checks">${DIVER_CHECKS.map(([k, label]) => S(`diver_${i}_chk_${k}`, label, ['Yes', 'N/A'])).join('')}</div>
         <div class="dive-subs" id="diveSubs_${i}"></div>
       </div>`;
     c.appendChild(d);
@@ -1592,6 +1787,13 @@ function calcDiveTotalTimes() {
       const td = $(p('totalDive'));
       if (tb && !tb.dataset.userEdited) { const v = diff(ls, lb); tb.value = v == null ? '' : v; }
       if (td && !td.dataset.userEdited) { const v = diff(ls, as); td.value = v == null ? '' : v; }
+      // Surface interval: previous dive's arrived-surface → this dive's left-surface (h:mm)
+      const si = $(p('si'));
+      if (si && j > 0 && !si.dataset.userEdited) {
+        const prevAs = $(`#d${i}s${j - 1}_arrSurf`)?.value;
+        const m = diff(prevAs, ls);
+        if (m != null) si.value = `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`;
+      }
     });
   }
 }
@@ -1995,8 +2197,9 @@ function buildStateObject() {
   // All named inputs/textareas/selects in #root, keyed by id
   $$('#root input[id], #root textarea[id], #root select[id]').forEach(el => {
     if (el.type === 'file' || el.id.startsWith('inc_')) return;   // incident form is its own record
-    state.fields[el.id] = el.value;
+    state.fields[el.id] = el.type === 'checkbox' ? (el.checked ? 'on' : '') : el.value;
   });
+  state.equipment = equipmentRows.filter(r => r.item || r.notes);
   // Signatures, only if non-empty
   $$('canvas[data-sig]').forEach(c => {
     if (!isSigEmpty(c)) state.sigs[c.dataset.sig] = c.toDataURL('image/png');
@@ -2050,8 +2253,11 @@ async function _applyState(s) {
 
   // Field values
   if (s.fields) for (const [id, val] of Object.entries(s.fields)) {
-    const el = document.getElementById(id); if (el) el.value = val;
+    const el = document.getElementById(id); if (!el) continue;
+    if (el.type === 'checkbox') el.checked = val === 'on' || val === true; else el.value = val;
   }
+  equipmentRows = Array.isArray(s.equipment) ? s.equipment.map(r => ({ item: r.item || '', notes: r.notes || '' })) : [];
+  renderEquipUI();
 
   // Sign-on rows match current teamMembers
   refreshAllSigns();
@@ -2086,6 +2292,9 @@ async function _applyState(s) {
   calcDiveTotalTimes();
   syncDivesToActivity();
   syncDrillToActivity();
+  syncTimesToActivity();
+  applyDrillRequired();
+  renderCloseoutSummary();
   sortActivityLog();
 }
 
@@ -2141,6 +2350,8 @@ async function exportPDF() {
     if (go) window.open(location.href, '_blank');
     return;
   }
+  const unsigned = unsignedList(buildStateObject());
+  if (unsigned.length && !confirm('Some signatures are missing:\n\n• ' + unsigned.join('\n• ') + '\n\nExport anyway?')) return;
   toast('Preparing PDF…', 4000);
   const job  = $('#da_jobNo')?.value || 'Worksheet';
   const date = $('#da_date')?.value  || todayISO();
@@ -2207,8 +2418,9 @@ async function buildReportHTML() {
     band('Project Overview') +
     cards([['Project', F_('da_project')], ['Job No.', jobNo], ['Date', wsDate], ['Location', F_('da_location')], ['Vessel / Facility', F_('da_vessel')],
            ['Client', F_('da_client')], ['Supervisor', F_('da_supervisor')], ['Client Contact', F_('da_contact')], ['Contact Number', F_('da_contactPh')]]) +
-    `<div class="cards c4">${[['Started Workshop', F_('da_startWorkshop')], ['Arrived Onsite', F_('da_arrivedOnsite')], ['Departed Site', F_('da_departedSite')], ['Region', region]].map(([l, v]) => card(l, v)).join('')}</div>` +
+    `<div class="cards c4">${[...PAY_TIMES.map(([id, l]) => [l, F_(id)]), ['Region', region]].map(([l, v]) => card(l, v)).join('')}</div>` +
     (F_('da_projDesc') ? sub('Day Notes') + lines(F_('da_projDesc')) : '') +
+    (st.equipment?.length ? sub('Equipment Used Onsite') + table(['Equipment', 'Notes'], st.equipment.map(e => [esc(e.item), esc(e.notes)])) : '') +
     band('Team Roster') +
     (team.length ? `<div class="chips">${team.map((n, i) => `<div class="chip">${i + 1}.&nbsp; ${esc(n)}</div>`).join('')}</div>` : '<div class="muted">No team recorded.</div>') +
     band('Daily Activity Log') +
@@ -2227,7 +2439,9 @@ async function buildReportHTML() {
       }
       if (!name && !rows.length) continue;
       const col = DIVER_COLORS[i];
+      const chk = DIVER_CHECKS.map(([k, l]) => { const v = F_(`diver_${i}_chk_${k}`); return v ? `${esc(l)}: <b>${esc(v)}</b>` : null; }).filter(Boolean).join(' &nbsp;·&nbsp; ');
       dives += `<div class="dvband" style="background:${col}">DIVER ${i + 1} &nbsp;—&nbsp; ${esc(name || '(unnamed)')}</div>` +
+        (chk ? `<div class="muted" style="padding:4px 10px;font-size:8.5pt;border:1px solid #d7dde5;border-top:0">${chk}</div>` : '') +
         (rows.length ? `<table class="t dv" style="--c:${col}"><thead><tr><th>#</th><th>SI</th><th>L. Surface</th><th>L. Bottom</th><th>Arr. Surface</th><th>Depth (m)</th><th>Dive (min)</th><th>Btm (min)</th><th>RF</th><th>RG</th><th>Bail-out (bar)</th></tr></thead><tbody>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>` : '<div class="muted">No dives logged.</div>');
     }
     out.push(section(
@@ -2297,6 +2511,33 @@ async function buildReportHTML() {
         ${photos ? `<div>${photos}</div>` : ''}</div>`;
     }
     out.push(section(band('Incident / Near-Miss Reports') + body));
+  }
+
+  // ---- 5c. Dive permit & isolations (only if used)
+  const dpUsed = ['dp_permitNo', 'dp_ptwNo', 'dp_isoPermitNo', 'dp_work', 'dp_engName', 'dp_supName'].some(id => F_(id)) || DP_ISO_ROWS.some((r, i) => F_(`dp_iso_${i}_tagged`) || F_(`dp_iso_${i}_verified`) || F_(`dp_iso_${i}_exempt`));
+  if (dpUsed) {
+    const iso = DP_ISO_ROWS.map((r, i) => [esc(r), F_(`dp_iso_${i}_exempt`) ? '<b>Exempt</b>' : '', esc(F_(`dp_iso_${i}_tagged`)), esc(F_(`dp_iso_${i}_verified`))]);
+    const ex = [0, 1, 2, 3].map(i => [esc(F_(`dp_ex_${i}_desc`)), esc(F_(`dp_ex_${i}_loc`))]).filter(r => r[0] || r[1]);
+    const signs = [['dp_eng', 'Master / Chief Engineer — isolations in place'], ['dp_sup', 'Dive Supervisor — permit approved'], ['dp_isoRemoved', 'Isolations removed'], ['dp_complete', 'Diving completed — site cleaned & locks removed']];
+    out.push(section(
+      band('Dive Permit & Isolations') +
+      cards([['Permit No.', F_('dp_permitNo')], ['Client Representative', F_('dp_clientRep')], ['PTW No.', F_('dp_ptwNo')], ['Isolation Permit No.', F_('dp_isoPermitNo')], ['Validity', F_('dp_validity')], ['Expires', [F_('dp_expireDate'), F_('dp_expireTime')].filter(Boolean).join(' ')]]) +
+      (F_('dp_work') ? sub('Work Description & Location') + lines(F_('dp_work')) : '') +
+      sub('Isolations') + table(['Isolation', 'Exempt', 'Tagged (Engineer / Master)', 'Verified (Dive Supervisor)'], iso) +
+      (ex.length ? sub('Equipment Exemptions') + table(['Equipment', 'Location / reason'], ex) : '') +
+      (F_('dp_simops') ? sub('SIMOPS & Communication') + lines(F_('dp_simops')) : '') +
+      sub('Authorisation') + `<div class="sigs c2">${signs.map(([id, l]) => sigCard(`${l}${F_(id + 'Name') ? ' — ' + F_(id + 'Name') : ''}${F_(id + 'Time') ? ' @ ' + F_(id + 'Time') : ''}`, st.sigs[id + 'Sig'])).join('')}</div>`));
+  }
+
+  // ---- 5d. Day close-out
+  if (F_('co_progress') || F_('co_challenges') || F_('co_improvements')) {
+    out.push(section(
+      band('Day Close-Out') +
+      sub('Progress made today') + lines(F_('co_progress')) +
+      sub('Challenges faced') + lines(F_('co_challenges')) +
+      sub('Improvement suggestions') + lines(F_('co_improvements')) +
+      (F_('co_tomorrow') ? sub('Plan for tomorrow') + lines(F_('co_tomorrow')) : '') +
+      sub('Summary') + `<pre style="font:9pt ui-monospace,Menlo,monospace;white-space:pre-wrap;padding:4px 14px">${esc(buildDaySummary())}</pre>`));
   }
 
   // ---- 6. Permits
@@ -2489,6 +2730,14 @@ const ACT = {
   deleteWs:          deleteWorksheet,
   sendIncident:      sendIncident,
   sendDrill:         sendDrillReport,
+  sendCloseout:      sendCloseout,
+  copyCloseout:      copyCloseout,
+  addEquipRow:       () => { equipmentRows.push({ item: '', notes: '' }); renderEquipUI(); scheduleSave(); },
+  removeEquipRow:    el => { equipmentRows.splice(+el.dataset.idx, 1); renderEquipUI(); scheduleSave(); },
+  toggleEquip:       () => { $('#equipPanel').classList.toggle('hidden'); ['#crewPanel', '#usersPanel'].forEach(id => $(id).classList.add('hidden')); renderEquipAdmin(); },
+  addEquip:          addEquipment,
+  removeEquip:       el => removeEquipment(el.dataset.id),
+  exportHours:       el => exportHoursCSV(el.dataset.job),
   removeIncPhoto:    el => { incPhotos.splice(+el.dataset.idx, 1); renderIncPhotos(); },
   ackIncident:       el => ackIncident(el.dataset.id),
   openIncJob:        el => openTodayWorksheet(el.dataset.job),
@@ -2533,6 +2782,10 @@ document.addEventListener('input', e => {
   }
 
   if (t.dataset.proj)                     syncProj(t);
+  if (t.dataset.equipIdx != null)         { equipmentRows[+t.dataset.equipIdx][t.dataset.equipField] = t.value; }
+  if (PAY_TIMES.some(([id]) => id === t.id)) syncTimesToActivity();
+  if (t.id?.startsWith('co_') || t.id?.startsWith('da_')) renderCloseoutSummary();
+  if (/^d\d+s\d+_si$/.test(t.id || ''))  t.dataset.userEdited = '1';
   if (t.id === 'dv_chamber' || t.id === 'dv_chamberPh') t.dataset.userEdited = '1';
   if (t.closest('.dive-sub'))             { calcDiveTotalTimes(); syncDivesToActivity(); }
   if (t.id?.startsWith('diver_') && t.id.endsWith('_name')) syncDivesToActivity();
@@ -2554,6 +2807,10 @@ document.addEventListener('change', e => {
   if (t.matches('[data-drop="inc"]'))              addIncidentPhotos(t.files);
   if (t.matches('[data-act="loadFile"]'))          loadFromFile(t);
   if (t.matches('[data-crew-active]'))             setCrewActive(t.dataset.crewActive, t.checked);
+  if (t.matches('[data-equip-active]'))            setEquipActive(t.dataset.equipActive, t.checked);
+  if (t.id === 'importJobsFile')                   importJobsFile(t);
+  if (t.id === 'da_drillRequired')                 applyDrillRequired();
+  if (t.dataset.proj === 'supervisor' && t.value)  pinSupervisorToRoster(t.value.trim());
   if (t.matches('[data-user-role]'))               setUserField(t.dataset.userRole, 'role', t.value);
   if (t.matches('[data-user-region]'))             setUserField(t.dataset.userRegion, 'region', t.value || null);
 });
@@ -2691,8 +2948,12 @@ async function loadDashboard(manual = false) {
     else { jobs = data; banner.classList.add('hidden'); try { localStorage.setItem(DASH_CACHE, JSON.stringify(jobs)); } catch (e) {} }
     const cr = await sb.from('crew').select('*').order('name');
     if (!cr.error) { crewList = cr.data; try { localStorage.setItem('franmarine_crew_cache', JSON.stringify(crewList)); } catch (e) {} }
+    const eq = await sb.from('equipment').select('*').order('category').order('name');
+    if (!eq.error) { equipmentList = eq.data; try { localStorage.setItem('franmarine_equip_cache', JSON.stringify(equipmentList)); } catch (e) {} }
   }
   if (!online() || !crewList.length) { try { crewList = JSON.parse(localStorage.getItem('franmarine_crew_cache')) || []; } catch (e) {} }
+  if (!online() || !equipmentList.length) { try { equipmentList = JSON.parse(localStorage.getItem('franmarine_equip_cache')) || []; } catch (e) {} }
+  renderEquipDatalist();
   renderCrewDatalist();
   renderPendingBanner();
   flushPending();
@@ -2732,7 +2993,7 @@ function renderJobs() {
     const todayWs = ws.find(w => w.ws_date === today);
     const chips = ws.slice(0, 6).map(w =>
       `<button class="ws-chip${w.ws_date === today ? ' today' : ''}${w.locked ? ' locked' : ''}" data-act="openWs" data-ws="${w.id}" data-job="${j.id}"
-         title="${esc(w.updated_by_name ? 'Last edit: ' + w.updated_by_name : '')}">${fmtDate(w.ws_date)}</button>`).join('');
+         title="${esc((w.summary?.issues || []).length ? 'Missing: ' + w.summary.issues.join(', ') : (w.updated_by_name ? 'Last edit: ' + w.updated_by_name : ''))}">${fmtDate(w.ws_date)}${(w.summary?.issues || []).length && !w.locked ? `<span class="miss">${w.summary.issues.length}</span>` : ''}</button>`).join('');
     const more = ws.length > 6 ? `<span class="muted" style="font-size:12px;align-self:center">+${ws.length - 6} more</span>` : '';
     const meta = [j.client, j.location, j.vessel].filter(Boolean).map(esc).join(' · ');
     let signal = '';
@@ -2836,7 +3097,7 @@ function prefillFromJob(job, wsDate) {
 function reshowTab() { const t = activeTab; activeTab = null; switchTab(t || 'daily'); }
 
 /* Fields worth carrying from the previous day's sheet on the same job */
-const CARRY_RE = /^(da_(client|location|vessel|supervisor|contact|contactPh)|dv_(hatModel|hatSerial|hatCheck)\d|dv_chamber(Ph)?|swms_(title|rev|date|highRisk))$/;
+const CARRY_RE = /^(da_(client|location|vessel|supervisor|contact|contactPh|drillRequired)|dv_(hatModel|hatSerial|hatCheck)\d|dv_chamber(Ph)?|swms_(title|rev|date|highRisk))$/;
 
 async function openTodayWorksheet(jobId) {
   const job = jobsById[jobId]; if (!job) return;
@@ -2859,6 +3120,7 @@ async function openTodayWorksheet(jobId) {
       for (let i = 0; i < NUM_DIVERS; i++) { const n = pd.fields?.[`diver_${i}_name`]; if (n) init.fields[`diver_${i}_name`] = n; }
       // SWMS document carries over too (same job, same SWMS) — pages are storage paths, so no re-upload
       if (pd.swms && !isDataRef(pd.swms.pages?.[0])) init.swms = pd.swms;
+      if (Array.isArray(pd.equipment)) init.equipment = pd.equipment.map(r => ({ item: r.item || '', notes: '' }));
       copiedFrom = prev.ws_date;
     } catch (e) { console.warn('copy-yesterday failed', e); }
   }
@@ -2938,7 +3200,7 @@ async function openWorksheet(ws, job) {
     showView('app'); setSync('offline', 'Offline — could not load this worksheet');
   }
   prefillFromJob(job, ws.ws_date);
-  renderCrewDatalist();
+  renderCrewDatalist(); renderEquipDatalist(); renderQR();
   lockJobFields(job, ws.ws_date);
   if (REGION_CONFIG[job.region] && currentRegion() !== job.region) { setRegion(job.region, true); editSeq++; saveState(); }
   applyLock();
@@ -2948,6 +3210,8 @@ async function openWorksheet(ws, job) {
   incPhotos = []; renderIncPhotos();
   loadIncidents();
   loadDrillReports();
+  loadCloseoutReports();
+  renderCloseoutSummary();
 }
 
 /* ---- Incidents ---- */
@@ -3115,6 +3379,111 @@ async function ackIncident(id) {
   if (error) { toast('✗ ' + error.message, 2500); return; }
   toast('✓ Acknowledged');
   if (currentWs) await loadIncidents(); else await loadDashboard();
+}
+
+/* ---- Day close-out → summary → PDF → managers ---- */
+let closeoutReports = [];
+
+function buildDaySummary() {
+  const st = buildStateObject(); const f = id => st.fields[id] || ''; const job = currentJob || {};
+  const team = (st.team || []).filter(Boolean);
+  let dives = 0, bottom = 0; const divers = [];
+  for (let i = 0; i < NUM_DIVERS; i++) { const n = f(`diver_${i}_name`); let dv = 0; for (let j = 0; j < (st.sub?.[i] || 1); j++) if (f(`d${i}s${j}_leftSurf`)) { dv++; bottom += +f(`d${i}s${j}_totalBottom`) || 0; } if (n && dv) divers.push(`${n} ×${dv}`); dives += dv; }
+  const acts = Array.from($$('#activityBody tr')).filter(tr => tr.querySelector('input[type=text]')?.value).length;
+  const hrs = m => m == null ? '—' : `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
+  return [
+    `DAY CLOSE-OUT — ${job.job_no || ''} ${f('da_project')}`,
+    `${fmtDate(f('da_date') || todayISO())} · ${job.region || ''} · ${f('da_location')}${f('da_vessel') ? ' · ' + f('da_vessel') : ''}`,
+    `Client: ${f('da_client') || '—'}   Supervisor: ${f('da_supervisor') || '—'}`,
+    ``,
+    `Start day ${f('da_startWorkshop') || '—'} · Dep. workshop ${f('da_departedWorkshop') || '—'} · Arr. onsite ${f('da_arrivedOnsite') || '—'} · Job completed ${f('da_jobCompleted') || '—'}`,
+    `Dep. site ${f('da_departedSite') || '—'} · Arr. workshop ${f('da_arrivedWorkshop') || '—'} · Finished day ${f('da_finishDay') || '—'}`,
+    `Paid hours ${hrs(diff(f('da_startWorkshop'), f('da_finishDay')))} · Onsite ${hrs(diff(f('da_arrivedOnsite'), f('da_departedSite')))}`,
+    ``,
+    `Team (${team.length}): ${team.join(', ') || '—'}`,
+    st.divingMode !== false ? `Dives: ${dives}${divers.length ? ' (' + divers.join(', ') + ')' : ''} · Bottom time ${hrs(bottom)}` : `Non-diving day`,
+    `Activity log entries: ${acts} · Drill: ${f('ed_type') || (f('da_drillRequired') === 'No' ? 'not required' : 'none')} · SWMS: ${f('swms_title') || (swmsFile ? swmsFile.name : '—')}`,
+    `Equipment: ${(st.equipment || []).map(e => e.item).filter(Boolean).join(', ') || '—'}`,
+    `Incidents: ${incidents.length ? incidents.map(i => `${i.severity} ${i.type}`).join('; ') : 'none'}`,
+    ``,
+    `PROGRESS: ${f('co_progress') || '—'}`,
+    `CHALLENGES: ${f('co_challenges') || '—'}`,
+    `IMPROVEMENTS: ${f('co_improvements') || '—'}`,
+    f('co_tomorrow') ? `TOMORROW: ${f('co_tomorrow')}` : null
+  ].filter(l => l !== null).join('\n');
+}
+function renderCloseoutSummary() {
+  const c = $('#coSummary'); if (!c || !currentWs) return;
+  c.textContent = buildDaySummary();
+  const issues = issuesFromState(buildStateObject()).filter(i => i !== 'Day close-out');
+  $('#coIssues').innerHTML = issues.length ? `<div class="issues">⚠ Still missing on this sheet: ${esc(issues.join(', '))}</div>` : '<div class="muted mt">✓ Nothing missing on this sheet.</div>';
+}
+async function copyCloseout() {
+  try { await navigator.clipboard.writeText(buildDaySummary()); toast('📋 Copied'); } catch (e) { alert(buildDaySummary()); }
+}
+
+function buildCloseoutPDF() {
+  const st = buildStateObject(); const f = id => st.fields[id] || ''; const job = currentJob || {};
+  const K = reportPDF('Day Close-Out', `Job: ${job.job_no || ''}   Date: ${f('da_date')}   ${job.region || ''}`);
+  K.band('Day Details');
+  K.cards([['Project', f('da_project')], ['Job No.', job.job_no], ['Date', f('da_date')], ['Location', f('da_location')], ['Vessel / Facility', f('da_vessel')], ['Client', f('da_client')], ['Supervisor', f('da_supervisor')], ['Region', job.region], ['Mode', st.divingMode !== false ? 'Diving' : 'Non-diving']]);
+  K.sub('Times'); K.cards(PAY_TIMES.map(([id, l]) => [l, f(id) || '—']), 4);
+  const hrs = m => m == null ? '—' : (m / 60).toFixed(2) + ' h';
+  K.cards([['Paid hours (start → finish)', hrs(diff(f('da_startWorkshop'), f('da_finishDay')))], ['Onsite hours', hrs(diff(f('da_arrivedOnsite'), f('da_departedSite')))], ['Team', String((st.team || []).filter(Boolean).length)]]);
+  K.sub('Progress made today'); K.para(f('co_progress'));
+  K.sub('Challenges faced'); K.para(f('co_challenges'));
+  K.sub('Improvement suggestions'); K.para(f('co_improvements'));
+  if (f('co_tomorrow')) { K.sub('Plan for tomorrow'); K.para(f('co_tomorrow')); }
+  K.sub('Team'); K.para((st.team || []).filter(Boolean).join(', '));
+  if ((st.equipment || []).length) { K.sub('Equipment used'); K.table(['Equipment', 'Notes'], st.equipment.map(e => [e.item, e.notes]), [70, 0]); }
+  if (st.divingMode !== false) {
+    const rows = []; for (let i = 0; i < NUM_DIVERS; i++) for (let j = 0; j < (st.sub?.[i] || 1); j++) { const g = k => f(`d${i}s${j}_${k}`); if (g('leftSurf')) rows.push([f(`diver_${i}_name`), `Dive ${j + 1}`, g('leftSurf'), g('arrSurf'), g('depth'), g('totalBottom'), g('rg')]); }
+    K.sub('Dives'); K.table(['Diver', '#', 'Left surface', 'Arrived surface', 'Depth (m)', 'Bottom (min)', 'RG'], rows, [0, 18, 26, 30, 22, 26, 14]);
+  }
+  if (incidents.length) { K.sub('Incidents / near-misses'); K.table(['Severity', 'Type', 'Description'], incidents.map(i => [i.severity, i.type, i.description]), [22, 40, 0]); }
+  const issues = issuesFromState(st);
+  K.note((issues.length ? 'Still missing on the sheet: ' + issues.join(', ') + '. ' : 'Sheet complete. ') + `Submitted by ${me?.name || ''} on ${new Date().toLocaleString('en-AU', { dateStyle: 'medium', timeStyle: 'short' })} from the Franmarine Daily Worksheet.`);
+  return K.finish();
+}
+
+async function sendCloseout() {
+  if (!currentWs || !currentJob) return;
+  const f = id => $('#' + id)?.value?.trim() || '';
+  const missing = [['co_progress', 'Progress made today'], ['co_challenges', 'Challenges faced'], ['co_improvements', 'Improvement suggestions']].filter(([id]) => !f(id)).map(([, l]) => l);
+  if (missing.length) { alert('Please fill in: ' + missing.join(', ') + '.'); return; }
+  if (!online()) { alert('Sending the close-out needs a connection — the notes are saved, send when back online.'); return; }
+  if (!window.jspdf?.jsPDF) { alert('PDF tools are still loading — try again in a moment.'); return; }
+  if (!confirm(`Email the day close-out to the ${currentJob.region} managers?`)) return;
+  const btn = $('#sendCoBtn'); btn.disabled = true; $('#coStatus').textContent = 'Building PDF…';
+  try {
+    clearTimeout(saveTimer); saveState(); await doPush(currentWs.id);
+    const blob = buildCloseoutPDF().output('blob');
+    const fname = `${currentJob.job_no}_${currentWs.ws_date}_DayCloseOut.pdf`.replace(/\s+/g, '_');
+    const path = `${currentWs.id}/closeout/${Date.now()}_${fname}`;
+    $('#coStatus').textContent = 'Uploading…';
+    const { error: upErr } = await sb.storage.from(BUCKET).upload(path, blob, { contentType: 'application/pdf', upsert: true });
+    if (upErr) throw upErr;
+    const { data: rep, error } = await sb.from('closeout_reports')
+      .insert({ worksheet_id: currentWs.id, job_id: currentJob.id, ws_date: currentWs.ws_date, pdf_path: path, file_name: fname, summary_text: buildDaySummary(),
+                sent_by: me.id, sent_by_name: me.name, email_status: 'pending' }).select('id').single();
+    if (error) throw error;
+    $('#coStatus').textContent = 'Emailing…';
+    const { data, error: fnErr } = await sb.functions.invoke('send-closeout-report', { body: { report_id: rep.id } });
+    if (fnErr) throw fnErr; if (data?.error) throw new Error(data.error);
+    $('#coStatus').textContent = `✓ Sent to ${(data.to || []).join(', ')}`;
+    toast('📧 Close-out sent', 2500); await loadCloseoutReports();
+  } catch (e) {
+    console.warn(e); $('#coStatus').textContent = '✗ ' + (e.message || e);
+    alert('Could not send the close-out: ' + (e.message || e) + '\n\nYour notes are saved on the sheet; try again shortly.');
+    await loadCloseoutReports();
+  }
+  btn.disabled = false;
+}
+async function loadCloseoutReports() {
+  const c = $('#coSent'); if (!c || !currentWs || !online()) return;
+  const { data } = await sb.from('closeout_reports').select('*').eq('worksheet_id', currentWs.id).order('created_at', { ascending: false });
+  closeoutReports = data || [];
+  c.innerHTML = closeoutReports.map(r => `<div class="muted" style="font-size:12px">📄 ${esc(r.file_name)} — ${r.email_status === 'sent' ? `sent ${new Date(r.emailed_at || r.created_at).toLocaleString('en-AU', { dateStyle: 'short', timeStyle: 'short' })} to ${esc((r.emailed_to || []).join(', '))}` : r.email_status === 'failed' ? `<b style="color:var(--bad)">email failed</b> — ${esc(r.email_error || '')}` : 'sending…'} · by ${esc(r.sent_by_name || '')}</div>`).join('');
 }
 
 /* ---- Emergency drill report → PDF → HSEQ ---- */
@@ -3303,6 +3672,9 @@ async function loadDrillReports() {
 async function lockWorksheet() {
   if (!currentWs || currentWs.locked) return;
   if (!online()) { toast('Signing off needs a connection', 2200); return; }
+  const stNow = buildStateObject();
+  const gaps = [...issuesFromState(stNow), ...unsignedList(stNow).map(u => 'Unsigned — ' + u)];
+  if (gaps.length && !confirm('Before signing off, this sheet is still missing:\n\n• ' + gaps.join('\n• ') + '\n\nSign off anyway?')) return;
   if (!confirm('Sign off and lock this worksheet?\n\nNo further edits will be possible unless a manager unlocks it.')) return;
   clearTimeout(saveTimer); saveState();
   await flushFiles();
@@ -3444,11 +3816,44 @@ function summarise(d) {
     dives += dv; bottom += b; diveMin += t;
   }
   const team = (d?.team || []).filter(Boolean);
-  return { supervisor: f.da_supervisor || null, team, team_count: team.length,
+  const times = { start: f.da_startWorkshop || '', depWs: f.da_departedWorkshop || '', arrSite: f.da_arrivedOnsite || '', jobDone: f.da_jobCompleted || '', depSite: f.da_departedSite || '', arrWs: f.da_arrivedWorkshop || '', finish: f.da_finishDay || '' };
+  const closeout = !!(f.co_progress && f.co_challenges && f.co_improvements);
+  return { supervisor: f.da_supervisor || null, team, team_count: team.length, times, closeout,
+           paid_min: diff(f.da_startWorkshop, f.da_finishDay), equipment: (d?.equipment || []).map(e => e.item).filter(Boolean),
+           issues: issuesFromState(d),
            onsite_min: diff(f.da_arrivedOnsite, f.da_departedSite), diving: d?.divingMode !== false,
            dives, bottom_min: bottom, dive_min: diveMin, divers,
            drill: f.ed_type || null, safe_to_proceed: f.tb_cl_9 || null,
            swms: d?.swms?.name || null, permits: (d?.permits || []).length };
+}
+
+/* What's still missing on a day sheet — shown on chips, the summary panel, the close-out tab and the sign-off gate */
+function issuesFromState(d) {
+  const f = d?.fields || {}; const out = [];
+  if (!f.da_supervisor) out.push('Supervisor');
+  if (!(d?.team || []).filter(Boolean).length) out.push('Team roster');
+  if (!f.da_startWorkshop || !f.da_finishDay) out.push('Start / finish times');
+  if (!f.swms_title && !d?.swms) out.push('SWMS');
+  if (d?.divingMode !== false) {
+    let dives = 0; for (let i = 0; i < NUM_DIVERS; i++) for (let j = 0; j < (d?.sub?.[i] || 1); j++) if (f[`d${i}s${j}_leftSurf`]) dives++;
+    if (!dives) out.push('Dive log');
+  }
+  if (!f.tb_cl_9) out.push('"Considered safe to proceed"');
+  if (!d?.sigs?.tb_supSig) out.push('Supervisor signature');
+  if (!(f.co_progress && f.co_challenges && f.co_improvements)) out.push('Day close-out');
+  return out;
+}
+
+/* Team members who have not signed a section that applies today */
+function unsignedList(st) {
+  const team = (st.team || []).filter(Boolean); const f = st.fields || {}; const out = [];
+  const scopes = [['tb_signOn', 'Toolbox sign-on']];
+  if (st.divingMode !== false) scopes.push(['dl_fitToDive', 'Fit to dive']);
+  if (f.swms_title || st.swms) scopes.push(['swms_signOff', 'SWMS sign-off']);
+  if (f.da_drillRequired !== 'No' && (f.ed_type || f.ed_step_0_time)) scopes.push(['ed_attendees', 'Drill attendance']);
+  for (const [scope, label] of scopes) { const missing = team.filter((n, i) => !st.sigs[`${scope}_${i}`]); if (missing.length) out.push(`${label}: ${missing.join(', ')}`); }
+  if (!st.sigs.tb_supSig) out.push('Supervisor authorisation signature');
+  return out;
 }
 
 function showSummary(jobId) {
@@ -3475,6 +3880,8 @@ function showSummary(jobId) {
       <div class="stat"><b>${S.filter(s => s.drill).length}</b><span>Drills</span></div>
       <div class="stat"><b>${sum('permits')}</b><span>Permits filed</span></div>
     </div>
+    <div class="flex mb" style="gap:8px;flex-wrap:wrap"><button class="btn sm ghost" data-act="exportHours" data-job="${j.id}">⬇ Export crew hours CSV</button></div>
+    ${ws.filter(w => (w.summary?.issues || []).length && !w.locked).map(w => `<div class="issues"><b>${fmtDate(w.ws_date)}</b> — missing: ${esc(w.summary.issues.join(', '))}</div>`).join('')}
     <div class="muted mb">${ws.length ? `${fmtDate(ws[0].ws_date)} → ${fmtDate(ws[ws.length - 1].ws_date)}` : ''}${S.length < ws.length ? ' · some sheets have not synced figures yet' : ''}</div>
     ${diverRows ? `<div class="tbl-scroll"><table><thead><tr><th>Diver</th><th>Days</th><th>Dives</th><th>Bottom</th><th>Max depth (m)</th></tr></thead><tbody>${diverRows}</tbody></table></div>` : '<div class="muted">No dives logged yet.</div>'}`;
   $('#summaryPanel').classList.remove('hidden');
@@ -3515,6 +3922,77 @@ async function setUserField(id, field, value) {
   const u = usersList.find(x => x.id === id); if (u) u[field] = value;
   if (field === 'region' && value !== me.region) renderUsers();   // handed over → drops off this list
   toast('✓ Saved');
+}
+
+/* ---- Equipment list (managers) ---- */
+function renderEquipAdmin() {
+  $('#ef_region').value = viewRegion;
+  $('#equipRowsAdmin').innerHTML = equipmentList.filter(e => inRegion(e.region)).map(e => `
+    <div class="crew-row">
+      <span>${esc(e.name)}</span><span class="muted">${esc(e.category || '')}</span><span class="muted">${esc(e.region || '')}</span>
+      <input type="checkbox" data-equip-active="${e.id}" ${e.active !== false ? 'checked' : ''}>
+      <button class="link" data-act="removeEquip" data-id="${e.id}" title="Remove">×</button>
+    </div>`).join('') || '<div class="muted" style="padding:8px 0">No equipment yet — add the fleet below.</div>';
+}
+async function addEquipment() {
+  const name = $('#ef_name').value.trim(); if (!name) return;
+  if (!online()) { $('#equipErr').textContent = 'Offline — try again when connected.'; return; }
+  const { data, error } = await sb.from('equipment').insert({ name, category: $('#ef_category').value.trim() || null, region: viewRegion, active: true }).select('*').single();
+  if (error) { $('#equipErr').textContent = error.message; return; }
+  $('#equipErr').textContent = ''; $('#ef_name').value = '';
+  equipmentList = [...equipmentList, data]; renderEquipAdmin(); renderEquipDatalist();
+}
+async function setEquipActive(id, active) {
+  const { error } = await sb.from('equipment').update({ active }).eq('id', id);
+  if (error) { toast('✗ ' + error.message, 2500); return; }
+  const e = equipmentList.find(x => x.id === id); if (e) e.active = active; renderEquipDatalist();
+}
+async function removeEquipment(id) {
+  const e = equipmentList.find(x => x.id === id); if (!e || !confirm(`Remove ${e.name} from the equipment list?`)) return;
+  const { error } = await sb.from('equipment').delete().eq('id', id);
+  if (error) { toast('✗ ' + error.message, 2500); return; }
+  equipmentList = equipmentList.filter(x => x.id !== id); renderEquipAdmin(); renderEquipDatalist();
+}
+
+/* ---- Import jobs from Excel / CSV (managers) ---- */
+async function importJobsFile(input) {
+  const f = input.files?.[0]; input.value = ''; if (!f) return;
+  if (!window.XLSX) { alert('Spreadsheet reader is still loading — try again in a moment.'); return; }
+  if (!online()) { alert('Importing jobs needs a connection.'); return; }
+  const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' });
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' });
+  const norm = k => String(k).toLowerCase().replace(/[^a-z]/g, '');
+  const pick = (r, ...keys) => { for (const k of Object.keys(r)) if (keys.includes(norm(k))) return String(r[k]).trim(); return ''; };
+  const existing = new Set(Object.values(jobsById).map(j => j.job_no.toLowerCase()));
+  const toAdd = [];
+  for (const r of rows) {
+    const job_no = pick(r, 'jobno', 'jobnumber', 'job', 'jobid'); const project = pick(r, 'project', 'projectname', 'description', 'title');
+    if (!job_no || !project || existing.has(job_no.toLowerCase())) continue;
+    toAdd.push({ job_no, project, client: pick(r, 'client', 'customer') || null, location: pick(r, 'location', 'site') || null, vessel: pick(r, 'vessel', 'vesselfacility', 'facility') || null,
+                 supervisor: pick(r, 'supervisor', 'divesupervisor') || null, contact: pick(r, 'contact', 'clientcontact') || null, contact_ph: pick(r, 'contactnumber', 'contactph', 'phone', 'mobile') || null,
+                 region: me.region, created_by: me.id });
+    existing.add(job_no.toLowerCase());
+  }
+  if (!toAdd.length) { alert(`No new jobs found in ${f.name}. Columns needed: Job No, Project (plus optional Client, Location, Vessel, Supervisor, Contact, Contact Number). Jobs already on the dashboard are skipped.`); return; }
+  if (!confirm(`Add ${toAdd.length} job${toAdd.length > 1 ? 's' : ''} to ${me.region} from ${f.name}?\n\n${toAdd.slice(0, 8).map(j => j.job_no + ' — ' + j.project).join('\n')}${toAdd.length > 8 ? '\n…' : ''}`)) return;
+  const { error } = await sb.from('jobs').insert(toAdd);
+  if (error) { alert('Import failed: ' + error.message); return; }
+  await loadDashboard(); toast(`✓ ${toAdd.length} job${toAdd.length > 1 ? 's' : ''} imported`, 2500);
+}
+
+/* ---- Crew hours CSV (per job, from each day's summary) ---- */
+function exportHoursCSV(jobId) {
+  const j = jobsById[jobId]; if (!j) return;
+  const ws = (j.worksheets || []).slice().sort((a, b) => a.ws_date.localeCompare(b.ws_date));
+  const rows = [['Job No', 'Project', 'Date', 'Crew member', 'Start day', 'Departed workshop', 'Arrived onsite', 'Job completed', 'Departed site', 'Arrived workshop', 'Finished day', 'Paid hours', 'Onsite hours', 'Signed off']];
+  for (const w of ws) {
+    const sm = w.summary || {}; const t = sm.times || {};
+    const paid = sm.paid_min != null ? (sm.paid_min / 60).toFixed(2) : ''; const onsite = sm.onsite_min != null ? (sm.onsite_min / 60).toFixed(2) : '';
+    for (const name of (sm.team || ['(no roster)'])) rows.push([j.job_no, j.project, w.ws_date, name, t.start || '', t.depWs || '', t.arrSite || '', t.jobDone || '', t.depSite || '', t.arrWs || '', t.finish || '', paid, onsite, w.locked ? 'Yes' : 'No']);
+  }
+  const csv = '\ufeff' + rows.map(r => r.map(csvEsc).join(',')).join('\n');
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  a.download = `${j.job_no}_crew_hours.csv`.replace(/\s+/g, '_'); a.click(); URL.revokeObjectURL(a.href);
 }
 
 /* ---- Crew list ---- */
