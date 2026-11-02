@@ -124,10 +124,10 @@ img.pending{min-height:80px;background:repeating-linear-gradient(45deg,#f4f6fa,#
 .seg button{border:none;background:#fff;padding:7px 16px;font:inherit;font-size:13px;font-weight:600;color:var(--navy);cursor:pointer;min-height:36px}
 .seg button+button{border-left:1px solid var(--border-2)}
 .seg button.active{background:var(--navy);color:#fff}
-.user-row{display:grid;grid-template-columns:1fr 1fr 130px 90px;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)}
+.user-row{display:grid;grid-template-columns:1fr 1fr 130px 90px 96px;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)}
 .user-row.head{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px}
 .user-row select{min-height:34px;padding:4px 8px}
-@media(max-width:600px){ .user-row{grid-template-columns:1fr 110px 80px;font-size:13px} .user-row .em{display:none} }
+@media(max-width:600px){ .user-row{grid-template-columns:1fr 110px 80px 44px;font-size:13px} .user-row .em{display:none} .user-row .btn.sm .lbl{display:none} }
 
 /* Incidents */
 .inc-sev{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;color:#fff;background:var(--warn)}
@@ -599,9 +599,13 @@ img{max-width:100%;height:auto}
     </div>
     <div class="sec hidden" id="usersPanel">
       <h2>Users <span class="muted" style="text-transform:none;font-weight:400">People only see their own region's jobs, crew and worksheets. New accounts start in NSW — move them here if they belong in WA.</span></h2>
-      <div class="user-row head"><span>Name</span><span class="em">Email</span><span>Role</span><span>Region</span></div>
+      <div class="user-row head"><span>Name</span><span class="em">Email</span><span>Role</span><span>Region</span><span>Link</span></div>
       <div id="userRows"></div>
-      <div class="muted mt">Add new people in Supabase → Authentication → Users; they appear here on their first sign-in.</div>
+      <div class="mt" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <button class="btn sm" data-act="sendLinkAll" id="sendLinkAllBtn">✉ Send new-link email to everyone listed</button>
+        <span class="muted" id="sendLinkStatus"></span>
+      </div>
+      <div class="muted mt">Each email carries a link to <b>this</b> address that lets the person choose a password and land in the app. The wording comes from Supabase → Authentication → Email Templates → <i>Reset Password</i>. Add new people in Supabase → Authentication → Users; they appear here on their first sign-in.</div>
       <div class="login-err" id="usersErr"></div>
       <div id="storageGauge"></div>
     </div>
@@ -2890,6 +2894,8 @@ const ACT = {
   openIncJob:        el => openTodayWorksheet(el.dataset.job),
   toggleCrew:        () => { $('#crewPanel').classList.toggle('hidden'); $('#usersPanel').classList.add('hidden'); renderCrew(); },
   toggleUsers:       () => { $('#usersPanel').classList.toggle('hidden'); $('#crewPanel').classList.add('hidden'); loadUsers(); },
+  sendLinkOne:       el => { const u = usersList.find(x => x.id === el.dataset.id); if (u && confirm(`Email ${u.email} a link to this address (choose password + open app)?`)) sendLinkTo([u]); },
+  sendLinkAll:       () => { const list = usersList.filter(u => (u.region || 'NSW') === me.region && u.email); if (list.length && confirm(`Email all ${list.length} ${me.region} users a link to this address?\n\nThe wording comes from the Supabase "Reset Password" email template — check it says what you want first.`)) sendLinkTo(list); },
   addCrew:           addCrew,
   removeCrew:        el => removeCrew(el.dataset.id),
   showSummary:       el => showSummary(el.dataset.job),
@@ -4117,7 +4123,33 @@ function renderUsers() {
         <option ${(u.region || 'NSW') === 'NSW' ? 'selected' : ''}>NSW</option>
         <option ${u.region === 'WA' ? 'selected' : ''}>WA</option>
       </select>
+      <button class="btn sm ghost" data-act="sendLinkOne" data-id="${u.id}" ${u.email ? '' : 'disabled'} title="Email ${esc(u.email || '')} a link to this address (set password + open app)">✉ <span class="lbl">Send link</span></button>
     </div>`).join('') || '<div class="muted" style="padding:8px 0">No users yet.</div>';
+}
+
+/* Email one user (or everyone in this region) a set-password link that lands on THIS address.
+ * Uses Supabase's password-recovery email, so the wording is the "Reset Password" template.
+ * Sent one at a time with a pause — Supabase rate-limits auth emails. */
+async function sendLinkTo(users) {
+  if (!online()) { $('#usersErr').textContent = 'Offline — sending links needs a connection.'; return; }
+  const targets = users.filter(u => u.email);
+  if (!targets.length) return;
+  const redirectTo = location.origin + location.pathname;
+  const btn = $('#sendLinkAllBtn'), st = $('#sendLinkStatus');
+  btn.disabled = true; $('#usersErr').textContent = '';
+  const failed = [];
+  for (let i = 0; i < targets.length; i++) {
+    const u = targets[i];
+    st.textContent = `Sending ${i + 1} of ${targets.length} — ${u.email}…`;
+    const { error } = await sb.auth.resetPasswordForEmail(u.email, { redirectTo });
+    if (error) failed.push(`${u.email}: ${error.message}`);
+    if (i < targets.length - 1) await new Promise(r => setTimeout(r, 1500));
+  }
+  btn.disabled = false;
+  const ok = targets.length - failed.length;
+  st.textContent = `Sent ${ok} of ${targets.length}.`;
+  if (failed.length) $('#usersErr').textContent = 'Not sent — ' + failed.join(' · ') + (failed.some(f => /rate|limit/i.test(f)) ? ' (Supabase email rate limit: wait a few minutes, or raise it under Authentication → Rate Limits.)' : '');
+  else toast(`✓ ${ok === 1 ? 'Link sent' : ok + ' links sent'}`);
 }
 async function setUserField(id, field, value) {
   if (field === 'region' && value !== me.region) {
