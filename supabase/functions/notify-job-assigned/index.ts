@@ -54,6 +54,7 @@ Deno.serve(async (req) => {
     <table role="presentation" cellspacing="0" cellpadding="0" style="margin:8px 0 14px">
       ${row("Job No.", job.job_no)}${row("Project", job.project)}${row("Start date", start)}${row("Client", job.client)}${row("Location", job.location)}${row("Vessel / Facility", job.vessel)}${row("Client contact", job.contact ? `${job.contact}${job.contact_ph ? " · " + job.contact_ph : ""}` : "")}
     </table>
+    ${job.swms?.name ? `<p>The SWMS for this job (<b>${esc(job.swms.name)}</b>) is attached, and it will already be on the first day's worksheet for sign-off.</p>` : ""}
     <p>The job is on your dashboard in the Daily Worksheet. On the day, open the job card and tap <b>+ Today's worksheet</b>.</p>
     ${appUrl ? `<p style="margin-top:16px"><a href="${appUrl}" style="background:#002060;color:#fff;text-decoration:none;padding:9px 14px;border-radius:6px;font-weight:600;font-size:13px">Open the Daily Worksheet</a></p>` : ""}
     <p style="color:#6b7280;font-size:12px;margin-top:18px">Sent automatically from the Franmarine Daily Worksheet. Questions — reply to ${esc(me.email)}.</p>
@@ -65,7 +66,12 @@ Deno.serve(async (req) => {
       host: Deno.env.get("SMTP_HOST") ?? "smtp.office365.com", port: Number(Deno.env.get("SMTP_PORT") ?? 587), secure: false, requireTLS: true,
       auth: { user: Deno.env.get("SMTP_USER"), pass: Deno.env.get("SMTP_PASS") },
     });
-    await transporter.sendMail({ from: Deno.env.get("SMTP_FROM") ?? `"Franmarine Worksheet" <${Deno.env.get("SMTP_USER")}>`, to: sup.email, replyTo: me.email ?? undefined, subject, text, html });
+    const attachments: { filename: string; content: Uint8Array; contentType: string }[] = [];
+    if (job.swms?.raw && !String(job.swms.raw).startsWith("data:")) {
+      const { data: file } = await admin.storage.from("worksheet-files").download(job.swms.raw);
+      if (file) attachments.push({ filename: String(job.swms.name || "SWMS.pdf").replace(/\.pdf$/i, "") + ".pdf", content: new Uint8Array(await file.arrayBuffer()), contentType: "application/pdf" });
+    }
+    await transporter.sendMail({ from: Deno.env.get("SMTP_FROM") ?? `"Franmarine Worksheet" <${Deno.env.get("SMTP_USER")}>`, to: sup.email, replyTo: me.email ?? undefined, subject, text, html, attachments });
     await admin.from("jobs").update({ supervisor_notified_at: new Date().toISOString(), supervisor_notified_to: sup.email }).eq("id", job_id);
     return json({ to: sup.email, name: sup.full_name });
   } catch (e) {

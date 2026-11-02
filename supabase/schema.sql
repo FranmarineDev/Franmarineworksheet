@@ -108,6 +108,7 @@ alter table public.jobs add column if not exists archived_at timestamptz;
 alter table public.jobs add column if not exists start_date date;                    -- planned first day on site
 alter table public.jobs add column if not exists supervisor_notified_at timestamptz; -- notify-job-assigned function
 alter table public.jobs add column if not exists supervisor_notified_to text;
+alter table public.jobs add column if not exists swms jsonb;                         -- SWMS attached to the job (same shape as a worksheet's); files at job/<id>/swms/
 
 -- ---------- Worksheets (one per job per day; the whole form lives in `data`) ----------
 create table if not exists public.worksheets (
@@ -289,11 +290,14 @@ drop policy if exists "worksheet-files: read"   on storage.objects;
 drop policy if exists "worksheet-files: write"  on storage.objects;
 drop policy if exists "worksheet-files: update" on storage.objects;
 drop policy if exists "worksheet-files: delete" on storage.objects;
--- Object paths are "<worksheet id>/<file id>/<page>", so visibility follows the worksheet
+-- Object paths are "<worksheet id>/<file id>/<page>" (visibility follows the worksheet)
+-- or "job/<job id>/swms/<page>" (visibility follows the job)
 create or replace function public.can_see_file(path text)
 returns boolean language sql stable security definer set search_path = public as $$
-  select exists (select 1 from public.worksheets w
-                 where w.id::text = split_part(path, '/', 1) and public.can_see_job(w.job_id));
+  select case when split_part(path, '/', 1) = 'job'
+    then exists (select 1 from public.jobs j where j.id::text = split_part(path, '/', 2) and public.can_see_job(j.id))
+    else exists (select 1 from public.worksheets w where w.id::text = split_part(path, '/', 1) and public.can_see_job(w.job_id))
+  end;
 $$;
 create policy "worksheet-files: read"   on storage.objects for select to authenticated using (bucket_id = 'worksheet-files' and public.can_see_file(name));
 create policy "worksheet-files: write"  on storage.objects for insert to authenticated with check (bucket_id = 'worksheet-files' and public.can_see_file(name));

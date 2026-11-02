@@ -666,6 +666,14 @@ img{max-width:100%;height:auto}
         <label class="f"><span>Client Contact</span><input id="jf_contact"></label>
         <label class="f"><span>Contact Number</span><input id="jf_contact_ph" type="tel"></label>
       </div>
+      <div class="f mt" style="display:block">
+        <span>SWMS for this job (PDF) <span class="muted" style="text-transform:none;font-weight:400">— goes onto the first day's worksheet automatically, and the supervisor gets it in their assignment email</span></span>
+        <div id="jobSwmsBox" class="flex" style="gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px">
+          <label class="btn ghost sm" style="cursor:pointer">📄 Choose PDF<input type="file" accept="application/pdf" hidden id="jf_swms_file"></label>
+          <span id="jobSwmsName" class="muted"></span>
+          <button class="btn sm ghost hidden" id="jobSwmsRemove" data-act="removeJobSwms" style="color:#b42318">Remove</button>
+        </div>
+      </div>
       <div class="login-err" id="jobErr"></div>
       <div class="flex mt" style="gap:8px;flex-wrap:wrap">
         <button class="btn" data-act="saveJob">Save Job</button>
@@ -2088,9 +2096,10 @@ async function hydrateImages(container) {
   }
 }
 
-function deleteRefs(e) {
+function deleteRefs(e, owner) {
   if (!sb) return;
-  const paths = [e.raw, ...(e.pages || [])].filter(r => r && !isDataRef(r));
+  const prefix = owner || (currentWs?.id ? currentWs.id + '/' : null);
+  const paths = [e.raw, ...(e.pages || [])].filter(r => r && !isDataRef(r) && (!prefix || r.startsWith(prefix)));
   if (paths.length) sb.storage.from(BUCKET).remove(paths).catch?.(() => {});
 }
 
@@ -2882,6 +2891,7 @@ const ACT = {
   newJob:            () => showJobForm(null),
   editJob:           el => showJobForm(jobsById[el.dataset.job]),
   cancelJob:         hideJobForm,
+  removeJobSwms:     removeJobSwms,
   saveJob:           saveJob,
   deleteJob:         deleteJob,
   toggleJobStatus:   el => toggleJobStatus(el.dataset.job),
@@ -2973,6 +2983,7 @@ document.addEventListener('change', e => {
   if (t.matches('#activityBody input[type=time]')) sortActivityLog();
   if (t.matches('[data-checklist]'))               paintChecklist(t);
   if (t.matches('[data-drop="swms"]'))             handleSWMSFile(t.files?.[0]);
+  if (t.id === 'jf_swms_file')                     { handleJobSwmsFile(t.files?.[0]); t.value = ''; }
   if (t.matches('[data-drop="perm"]'))             handlePermitFiles(t.files);
   if (t.matches('[data-drop="inc"]'))              addIncidentPhotos(t.files);
   if (t.matches('[data-act="loadFile"]'))          loadFromFile(t);
@@ -3209,7 +3220,7 @@ function renderJobs() {
         ${mgr ? `<button class="link" data-act="editJob" data-job="${j.id}">Edit</button>` : ''}
       </div>
       <div class="card-title">${esc(j.project)}</div>
-      <div class="card-meta">${meta || '<i>No client / location set</i>'}${j.supervisor ? `<br>Supervisor: <b>${esc(j.supervisor)}</b>` : ''}${j.start_date ? `${j.supervisor ? ' · ' : '<br>'}Starts ${fmtDate(j.start_date)}` : ''}</div>
+      <div class="card-meta">${meta || '<i>No client / location set</i>'}${j.supervisor ? `<br>Supervisor: <b>${esc(j.supervisor)}</b>` : ''}${j.start_date ? `${j.supervisor ? ' · ' : '<br>'}Starts ${fmtDate(j.start_date)}` : ''}${j.swms?.name ? `<br>📄 SWMS: ${esc(j.swms.name)}` : ''}</div>
       <div class="card-meta">${ws.length} worksheet${ws.length === 1 ? '' : 's'} · ${last}</div>
       <div class="ws-list">${chips}${more}</div>
       <div class="card-actions">
@@ -3232,6 +3243,7 @@ function showJobForm(job) {
   for (const k of ['job_no','project','region','client','location','vessel','start_date','supervisor','contact','contact_ph'])
     $('#jf_' + k).value = job?.[k] ?? (k === 'region' ? me.region : '');
   $('#jobForm').dataset.prevSupervisor = job?.supervisor || '';
+  jobSwms = job?.swms ? normaliseEntry(job.swms, 'swms') : null; jobSwmsDirty = false; paintJobSwms();
   fillSupervisorList();
   $('#jobErr').textContent = '';
   $('#deleteJobBtn').classList.toggle('hidden', !job || (job.worksheets || []).length > 0);
@@ -3252,6 +3264,19 @@ async function saveJob() {
   else    res = await sb.from('jobs').insert({ ...row, created_by: me.id });
   if (res.error) { $('#jobErr').textContent = res.error.message; return; }
   const supChanged = row.supervisor && row.supervisor !== ($('#jobForm').dataset.prevSupervisor || '');
+  if (jobSwmsDirty) {
+    try {
+      let jobId = id;
+      if (!jobId) { const { data } = await sb.from('jobs').select('id').eq('job_no', row.job_no).eq('project', row.project).order('created_at', { ascending: false }).limit(1).maybeSingle(); jobId = data?.id; }
+      if (jobId) {
+        const old = jobsById[jobId]?.swms;
+        if (old) deleteRefs(normaliseEntry(old, 'swms'), `job/${jobId}/`);
+        const entry = jobSwms ? await uploadJobSwms(jobId, jobSwms) : null;
+        const { error } = await sb.from('jobs').update({ swms: entry }).eq('id', jobId);
+        if (error) throw error;
+      }
+    } catch (e) { toast('SWMS upload failed: ' + e.message, 4000); }
+  }
   hideJobForm();
   await loadDashboard();
   toast(id ? '✓ Job updated' : '✓ Job added');
@@ -3270,6 +3295,31 @@ async function notifyJobAssigned(jobId, name) {
     if (data?.skipped) { toast(`No email — ${data.skipped}`, 4000); return; }
     toast(`✉ ${name} emailed about this job`, 2500);
   } catch (e) { toast('Supervisor email not sent: ' + e.message, 4000); }
+}
+/* SWMS attached to the job itself (jobs.swms — same entry shape as a worksheet's SWMS). Files live at
+ * job/<job id>/swms/... in Storage. New jobs upload after the insert, once the id exists. */
+let jobSwms = null;            // entry currently shown in the job form
+let jobSwmsDirty = false;      // changed since the form opened
+function paintJobSwms() {
+  $('#jobSwmsName').textContent = jobSwms ? `${jobSwms.name}${jobSwms.pages?.length ? ` · ${jobSwms.pages.length} page${jobSwms.pages.length === 1 ? '' : 's'}` : ''}` : 'No SWMS attached';
+  $('#jobSwmsRemove').classList.toggle('hidden', !jobSwms);
+}
+async function handleJobSwmsFile(file) {
+  if (!file || file.type !== 'application/pdf') return;
+  $('#jobSwmsName').textContent = 'Reading PDF…';
+  jobSwms = await makeFileEntry(file, 'swms');
+  jobSwmsDirty = true; paintJobSwms();
+}
+function removeJobSwms() { jobSwms = null; jobSwmsDirty = true; paintJobSwms(); }
+async function uploadJobSwms(jobId, e) {
+  const base = `job/${jobId}/swms`;
+  if (e.raw && isDataRef(e.raw)) e.raw = await uploadRef(e.raw, `${base}/raw.pdf`, 'application/pdf');
+  for (let i = 0; i < e.pages.length; i++) {
+    if (!isDataRef(e.pages[i])) continue;
+    const ext = e.pages[i].startsWith('data:image/png') ? 'png' : 'jpg';
+    e.pages[i] = await uploadRef(e.pages[i], `${base}/p${i + 1}.${ext}`);
+  }
+  return e;
 }
 /* Supervisor picker = user accounts in the job's region (so the assignment email can find them). */
 async function fillSupervisorList() {
@@ -3390,6 +3440,7 @@ async function openTodayWorksheet(jobId) {
       copiedFrom = prev.ws_date;
     } catch (e) { console.warn('copy-yesterday failed', e); }
   }
+  if (!init.swms && job.swms) { init.swms = normaliseEntry(job.swms, 'swms'); if (!init.fields.swms_title) init.fields.swms_title = (job.swms.name || '').replace(/\.pdf$/i, ''); }
   const { data, error } = await sb.from('worksheets')
     .insert({ job_id: jobId, ws_date: today, supervisor: init.fields.da_supervisor || null,
               data: init, created_by: me.id, updated_by: me.id, updated_by_name: me.name })
