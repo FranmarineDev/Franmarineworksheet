@@ -1240,7 +1240,7 @@ function pageIncident() {
     <h1>⚠️ Incident / Near-Miss Report</h1>
 
     <div class="sec">
-      <h2>Report an incident <span class="muted" style="text-transform:none;font-weight:400">Sends straight to the ${esc(currentJob?.region || '')} managers by email and flags the job on the dashboard</span></h2>
+      <h2>Report an incident <span class="muted" style="text-transform:none;font-weight:400">Emails the ${esc(currentJob?.region || '')} managers and HSEQ straight away, with a PDF of this report, and flags the job on the dashboard</span></h2>
       <div class="g3">
         ${S('inc_type', 'Type *', INC_TYPES)}
         ${S('inc_severity', 'Severity *', ['Low', 'Medium', 'High'])}
@@ -1265,7 +1265,7 @@ function pageIncident() {
         <div class="inc-photos" id="incPhotos"></div>
       </div>
       <div class="flex mt" style="gap:12px;align-items:center;flex-wrap:wrap">
-        <button class="btn send" data-act="sendIncident" id="sendIncBtn">🚨 Send to managers</button>
+        <button class="btn send" data-act="sendIncident" id="sendIncBtn">🚨 Send to managers &amp; HSEQ</button>
         <span class="muted" id="incStatus">Reported by ${esc(me?.name || '')}</span>
       </div>
     </div>
@@ -3388,7 +3388,7 @@ async function sendIncident() {
   if (!currentWs || !currentJob) return;
   const f = readIncidentForm();
   if (!f.type || !f.severity || !f.description) { alert('Type, severity and a description are required.'); return; }
-  if (!confirm(`Send this ${f.severity.toLowerCase()}-severity ${f.type.toLowerCase()} report to the ${currentJob.region} managers now?`)) return;
+  if (!confirm(`Send this ${f.severity.toLowerCase()}-severity ${f.type.toLowerCase()} report to the ${currentJob.region} managers and HSEQ now?`)) return;
   const btn = $('#sendIncBtn'); btn.disabled = true; $('#incStatus').textContent = 'Sending…';
   const rec = { ...f, worksheet_id: currentWs.id, job_id: currentJob.id, ws_date: currentWs.ws_date,
                 reported_by_name: me.name, photos: incPhotos.slice(), queued_at: Date.now(), local_id: 'inc_' + Date.now() };
@@ -3403,7 +3403,7 @@ async function sendIncident() {
   btn.disabled = false;
   if (r.ok) {
     clearIncidentForm(); await loadIncidents();
-    $('#incStatus').textContent = r.emailed ? `✓ Sent to ${r.emailed} manager${r.emailed === 1 ? '' : 's'}` : '✓ Saved and flagged on the dashboard (email pending)';
+    $('#incStatus').textContent = r.emailed ? `✓ Sent to ${r.sent_to.join(', ')}` : '✓ Saved and flagged on the dashboard (email pending)';
     toast('🚨 Incident reported', 2500);
   } else {
     queueIncident(rec);
@@ -3435,7 +3435,7 @@ async function submitIncident(rec) {
     } catch (e) { console.warn('incident pdf failed', e); pdf_path = null; }
     if (paths.length || pdf_path) await sb.from('incidents').update({ photos: paths, pdf_path }).eq('id', inc.id);
     const n = await notifyIncident(inc.id);
-    return { ok: true, emailed: n };
+    return { ok: true, emailed: n.length, sent_to: n };
   } catch (e) { return { ok: false, error: e.message || String(e) }; }
 }
 
@@ -3443,8 +3443,8 @@ async function notifyIncident(id) {
   try {
     const { data, error } = await sb.functions.invoke('notify-incident', { body: { incident_id: id } });
     if (error) throw error;
-    return data?.sent_to?.length ?? 0;
-  } catch (e) { console.warn('notify failed', e); return 0; }
+    return data?.sent_to ?? [];
+  } catch (e) { console.warn('notify failed', e); return []; }
 }
 
 function queueIncident(rec) {
