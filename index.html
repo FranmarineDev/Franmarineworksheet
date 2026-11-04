@@ -2416,6 +2416,30 @@ function clearAll() {
 
 /* === 20. Exports ================================================= */
 
+/* iPad / iPhone Safari silently ignores print() called on a hidden iframe, so on iOS the
+   report is opened as its own tab (opened synchronously inside the tap so the popup
+   blocker allows it) and printed from there — Share sheet → Save to Files / Print. */
+const isIOS = () => /iP(hone|ad|od)/.test(navigator.platform) || /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+function openReportTab() {
+  const w = window.open('', '_blank');
+  if (!w) return null;
+  try { w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>Preparing PDF…</title></head><body style="font:16px -apple-system,system-ui,sans-serif;padding:24px;color:#1B2A4A">Preparing PDF…</body></html>'); } catch (e) {}
+  return w;
+}
+function fillReportTab(w, html, title) {
+  const bar = `<div id="pdfbar" style="position:sticky;top:0;z-index:9;display:flex;gap:10px;align-items:center;padding:10px 14px;background:#1B2A4A;color:#fff;font:15px -apple-system,system-ui,sans-serif">
+    <button onclick="window.print()" style="font:inherit;font-weight:600;padding:9px 16px;border:0;border-radius:8px;background:#fff;color:#1B2A4A">Save / Print PDF</button>
+    <span style="opacity:.85">In the print sheet, pinch out on the preview or tap Share to save it as a PDF.</span>
+    <button onclick="window.close()" style="margin-left:auto;font:inherit;padding:9px 14px;border:1px solid rgba(255,255,255,.5);border-radius:8px;background:transparent;color:#fff">Close</button>
+  </div><style>@media print{#pdfbar{display:none!important}}</style>`;
+  const out = html.replace(/<body([^>]*)>/i, `<body$1>${bar}`);
+  w.document.open(); w.document.write(out); w.document.close();
+  try { w.document.title = title; } catch (e) {}
+  const d = w.document;
+  Promise.all(Array.from(d.images).filter(i => !i.complete).map(i => new Promise(r => { i.onload = i.onerror = r; })))
+    .then(() => setTimeout(() => { try { w.focus(); w.print(); } catch (e) {} }, 300));
+}
+
 async function exportPDF() {
   if (navigator.standalone) {
     // iOS Home Screen apps can't print. Hand over to Safari, which can.
@@ -2423,16 +2447,20 @@ async function exportPDF() {
     if (go) window.open(location.href, '_blank');
     return;
   }
+  const tab = isIOS() ? openReportTab() : null;   // must open inside the tap, before any await
   const unsigned = unsignedList(buildStateObject());
-  if (unsigned.length && !confirm('Some signatures are missing:\n\n• ' + unsigned.join('\n• ') + '\n\nExport anyway?')) return;
+  if (unsigned.length && !confirm('Some signatures are missing:\n\n• ' + unsigned.join('\n• ') + '\n\nExport anyway?')) { tab?.close(); return; }
   toast('Preparing PDF…', 4000);
   const job  = $('#da_jobNo')?.value || 'Worksheet';
   const date = $('#da_date')?.value  || todayISO();
   let html;
   try { html = await buildReportHTML(); }
-  catch (e) { console.warn(e); alert('Could not build the PDF: ' + e.message); return; }
+  catch (e) { console.warn(e); tab?.close(); alert('Could not build the PDF: ' + e.message); return; }
+  const fileTitle = `${job}_${date}_DailyWorksheet`.replace(/\s+/g, '_');
+  if (tab) { fillReportTab(tab, html, fileTitle); return; }
+  if (isIOS()) toast('Pop-ups are blocked — allow them for this site in Safari settings to export', 4000);
   const origTitle = document.title;
-  document.title = `${job}_${date}_DailyWorksheet`.replace(/\s+/g, '_');
+  document.title = fileTitle;
   $('#reportFrame')?.remove();
   const f = document.createElement('iframe');
   f.id = 'reportFrame';
@@ -2741,6 +2769,7 @@ async function downloadPackage(jobId) {
     return;
   }
   if (!online()) { alert('Building the package needs a connection.'); return; }
+  const tab = isIOS() ? openReportTab() : null;   // must open inside the tap, before any await
   toast('Building worksheet package…', 6000);
   try {
     const [{ data: sheets, error }, { data: incs }] = await Promise.all([
@@ -2748,7 +2777,7 @@ async function downloadPackage(jobId) {
       sb.from('incidents').select('*').eq('job_id', jobId)
     ]);
     if (error) throw error;
-    if (!sheets?.length) { alert('No worksheets on this job yet.'); return; }
+    if (!sheets?.length) { tab?.close(); alert('No worksheets on this job yet.'); return; }
     const byWs = {}; for (const i of (incs || [])) (byWs[i.worksheet_id] ||= []).push(i);
     const parts = [];
     const rows = [];
@@ -2770,7 +2799,10 @@ async function downloadPackage(jobId) {
       <table class="t"><thead><tr><th>Date</th><th>Supervisor</th><th>Team</th><th>Dives</th><th>Bottom time</th><th>Paid hours</th><th>Incidents</th><th>Status</th></tr></thead><tbody>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>
       <div class="muted" style="margin-top:10px">Each day's full Daily Worksheet follows, in date order. Pages carry the job number and date in the header.</div></div></td></tr></tbody></table>`;
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(job.job_no)} — Worksheet Package</title><style>${REPORT_CSS}</style></head><body>${cover}${parts.map(p => p.replace('<table class="doc">', '<table class="doc brk">')).join('')}</body></html>`;
-    const origTitle = document.title; document.title = `${job.job_no}_WorksheetPackage`.replace(/\s+/g, '_');
+    const fileTitle = `${job.job_no}_WorksheetPackage`.replace(/\s+/g, '_');
+    if (tab) { fillReportTab(tab, html, fileTitle); return; }
+    if (isIOS()) toast('Pop-ups are blocked — allow them for this site in Safari settings to export', 4000);
+    const origTitle = document.title; document.title = fileTitle;
     $('#reportFrame')?.remove();
     const fr = document.createElement('iframe'); fr.id = 'reportFrame'; fr.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden';
     document.body.appendChild(fr); fr.srcdoc = html;
@@ -2781,7 +2813,7 @@ async function downloadPackage(jobId) {
       fr.contentWindow.addEventListener('afterprint', done, { once: true }); setTimeout(done, 120000);
       fr.contentWindow.focus(); fr.contentWindow.print();
     };
-  } catch (e) { console.warn(e); alert('Could not build the package: ' + (e.message || e)); }
+  } catch (e) { console.warn(e); tab?.close(); alert('Could not build the package: ' + (e.message || e)); }
 }
 
 function hideEmptyForPrint() {
