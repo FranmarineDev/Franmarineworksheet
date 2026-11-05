@@ -3,7 +3,7 @@
 create extension if not exists pg_cron;
 create extension if not exists pg_net;
 
--- mgmt_stats: the scheduler calls it as the service role, which has no auth.uid()
+-- mgmt_stats: the scheduler calls it as the service role (no auth.uid()); also adds the drill-down behind the Hazards / near misses tile
 create or replace function public.mgmt_stats(period_days int default 30)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare
@@ -119,6 +119,12 @@ begin
       'voided', (select coalesce(jsonb_agg(jsonb_build_object('job', j.job_no, 'date', w.ws_date, 'by', w.voided_by_name, 'reason', w.void_reason, 'region', j.region)), '[]'::jsonb) from worksheets w join jobs j on j.id = w.job_id where w.voided_at >= since),
       'open_investigations', (select coalesce(jsonb_agg(jsonb_build_object('job', j.job_no, 'date', x.ws_date, 'type', x.type, 'severity', x.severity, 'reported_by', x.reported_by_name, 'region', j.region)), '[]'::jsonb) from incidents x join jobs j on j.id = x.job_id where coalesce(x.status,'') <> 'withdrawn' and x.status = 'open'),
       'no_equipment', (select coalesce(jsonb_agg(jsonb_build_object('job', j.job_no, 'date', w.ws_date, 'supervisor', w.supervisor, 'region', j.region) order by w.ws_date desc), '[]'::jsonb) from worksheets w join jobs j on j.id = w.job_id where w.ws_date >= since and w.voided_at is null and jsonb_array_length(coalesce(w.data->'equipment','[]'::jsonb)) = 0),
+      'hazards', (select coalesce(jsonb_agg(row order by row->>'date' desc), '[]'::jsonb) from (
+                     select jsonb_build_object('job', j.job_no, 'date', w.ws_date, 'source', 'Toolbox', 'type', w.data->'fields'->>format('tb_hz_%s_type', i), 'hazard', w.data->'fields'->>format('tb_hz_%s_hazard', i), 'control', w.data->'fields'->>format('tb_hz_%s_control', i), 'raised_by', coalesce(nullif(w.data->'fields'->>format('tb_hz_%s_by', i), ''), w.supervisor), 'region', j.region) row
+                     from worksheets w join jobs j on j.id = w.job_id, generate_series(0,7) i where w.ws_date >= since and coalesce(w.data->'fields'->>format('tb_hz_%s_hazard', i),'') <> ''
+                     union all
+                     select jsonb_build_object('job', j.job_no, 'date', x.ws_date, 'source', 'Incident', 'type', x.severity, 'hazard', x.description, 'control', x.actions, 'raised_by', x.reported_by_name, 'region', j.region)
+                     from incidents x join jobs j on j.id = x.job_id where coalesce(x.status,'') <> 'withdrawn' and x.ws_date >= since and x.type = 'Near miss') h),
       'dive_mode', (select coalesce(jsonb_agg(jsonb_build_object('job', j.job_no, 'date', w.ws_date, 'mode', case when coalesce(w.data->>'divingMode','true') = 'false' then 'Non-diving' else 'Diving' end, 'dives', coalesce(w.summary->>'dives','0'), 'supervisor', w.supervisor, 'region', j.region) order by w.ws_date desc), '[]'::jsonb)
                      from worksheets w join jobs j on j.id = w.job_id where w.ws_date >= since and w.voided_at is null),
       'running_jobs', (select coalesce(jsonb_agg(jsonb_build_object('job', j.job_no, 'project', j.project, 'client', j.client, 'supervisor', j.supervisor, 'started', j.start_date, 'region', j.region) order by j.start_date desc nulls last), '[]'::jsonb) from jobs j where j.status = 'active'),
