@@ -116,3 +116,9 @@ Dashboard: bundled jobs with day cards, Manage menu, completed-jobs filter, new 
 **App** — `git checkout main && git merge v3.1 && git push`.
 
 Changes: Withdraw button on incidents (reporter or manager, reason required; record kept, drops off the day, close-out and management figures); signature stamp reads "captured on <login>'s login" since crew sign on the supervisor's device; dive plan reference falls back to the PDF file name when it is not FUS-DIVE numbered, D-03 treats a missing revision as review not fail; Close-Out summary rebuilds every time the tab opens; East/West segment on the Jobs dashboard for management users.
+
+## v3.4 — monthly report scheduler
+
+1. Edge Functions → Secrets → add `CRON_SECRET` (any long random string, e.g. from a password generator).
+2. SQL editor → paste `supabase/migration_v34.sql`, replace `CRON_SECRET_VALUE` with the same string, Run. It enables pg_cron + pg_net, lets the scheduler call `mgmt_stats`, and schedules `monthly-ops-report` for 00:00 UTC on the 1st (11:00 AEDT / 10:00 AEST).
+3. Test without waiting: Management View → Monthly report → "Issue last month's report now". The file lands in the `reports` bucket as `YYYY-MM-monthly-report.html` and is emailed to everyone with Management View (+ `MONTHLY_TO` secret, optional).

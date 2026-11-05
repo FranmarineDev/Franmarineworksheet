@@ -3983,13 +3983,14 @@ function openDrill(key) {
 async function monthlyReport() {
   const m = $('#mgmtDrill'); $('#drillTitle').textContent = 'Monthly Operations & HSEQ Report';
   let list = [];
-  if (online() && sb) { try { const { data } = await sb.storage.from('reports').list('', { sortBy: { column: 'name', order: 'desc' } }); list = (data || []).filter(f => /monthly-report\.pdf$/.test(f.name)); } catch (e) {} }
-  $('#drillBody').innerHTML = `<div class="muted mb">Issued automatically at 06:00 on the 1st of each month for the previous calendar month and emailed to everyone with management access. Sheets signed off after the 1st count in the following month's report.</div>
+  if (online() && sb) { try { const { data } = await sb.storage.from('reports').list('', { sortBy: { column: 'name', order: 'desc' } }); list = (data || []).filter(f => /monthly-report\.(pdf|html)$/.test(f.name)); } catch (e) {} }
+  $('#drillBody').innerHTML = `<div class="muted mb">Issued automatically on the morning of the 1st of each month for the previous calendar month and emailed to everyone with management access. Sheets signed off after the 1st count in the following month's report.</div>
     ${list.length ? `<div class="tbl-scroll"><table class="mgmt-tbl"><thead><tr><th>Month</th><th>File</th><th></th></tr></thead><tbody>${list.map(f => `<tr><td>${esc(f.name.slice(0, 7))}</td><td>${esc(f.name)}</td><td><button class="btn sm ghost" data-act="openReport" data-file="${esc(f.name)}">Open</button> <button class="btn sm ghost" data-act="resendReport" data-file="${esc(f.name)}">Re-send email</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="muted">No issued reports yet.</div>'}
-    <div class="flex mt" style="gap:8px;flex-wrap:wrap"><button class="btn" data-act="previewReport">👁 Preview this month from current figures</button><button class="btn ghost" data-act="registerPdf">📄 Document register</button></div>`;
+    <div class="flex mt" style="gap:8px;flex-wrap:wrap"><button class="btn" data-act="previewReport">👁 Preview this month from current figures</button><button class="btn ghost" data-act="issueReport">📧 Issue last month's report now</button><button class="btn ghost" data-act="registerPdf">📄 Document register</button></div>`;
   m.classList.remove('hidden');
 }
 function openIssuedReport(el) { (async () => { try { const { data } = await sb.storage.from('reports').createSignedUrl(el.dataset.file, 600); if (data?.signedUrl) window.open(data.signedUrl, '_blank'); } catch (e) { toast('Could not open', 2000); } })(); }
+function issueMonthlyReport() { if (!confirm('Issue the previous calendar month\'s report now?\n\nIt is filed under Monthly report and emailed to everyone with Management View.')) return; (async () => { toast('Building report…', 4000); try { const { data, error } = await sb.functions.invoke('monthly-report', { body: { issue: true } }); if (error) throw error; if (data?.error) throw new Error(data.error); toast(`📧 Issued ${data.file} to ${(data.to || []).length} people`, 3500); monthlyReport(); } catch (e) { toast('✗ ' + e.message, 3500); } })(); }
 function resendIssuedReport(el) { (async () => { try { const { error } = await sb.functions.invoke('monthly-report', { body: { resend: el.dataset.file } }); toast(error ? '✗ ' + error.message : '📧 Re-sent', 2500); } catch (e) { toast('✗ ' + e.message, 2500); } })(); }
 function previewMonthlyReport() {
   if (!window.jspdf?.jsPDF) { toast('PDF tools are still loading', 2000); return; }
@@ -4342,6 +4343,7 @@ const ACT = {
   remindSupervisors: () => toast('Reminder queued for the supervisors on these sheets', 2200),
   openReport:        openIssuedReport,
   resendReport:      resendIssuedReport,
+  issueReport:       issueMonthlyReport,
   previewReport:     previewMonthlyReport,
   clearDoneFilter:   clearDoneFilter,
   runCompliance:     renderCompliance,

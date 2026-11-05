@@ -12,7 +12,9 @@ declare
   ot_std constant int := 480;   -- paid minutes per person per day before overtime counts (8 h)
 begin
   select can_view_management into ok from profiles where id = auth.uid();
-  if not coalesce(ok, false) then raise exception 'management access required'; end if;
+  -- management users, or the service role (the monthly-report scheduler)
+  if not coalesce(ok, false) and coalesce((nullif(current_setting('request.jwt.claims', true), '')::jsonb)->>'role', '') <> 'service_role'
+  then raise exception 'management access required'; end if;
 
   foreach r in array array['NSW','WA'] loop
     select jsonb_build_object(
