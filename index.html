@@ -1120,7 +1120,7 @@ const REGION_CONFIG = {
   NSW: { chamber:'Prince of Wales Hospital, Nurses Dr, Randwick NSW 2031',
          phone:'(02) 9382 3880', hatRegion:'Sydney' },
   WA:  { chamber:'Fiona Stanley Hospital, Robin Warren Dr, Murdoch WA 6150',
-         phone:'(08) 6152 5222', hatRegion:'Perth' }
+         phone:'(08) 6152 5222', hyperDoc:'Fiona Stanley hyperbaric on-call (08) 6152 2222', hatRegion:'Perth' }
 };
 
 const HAT_INVENTORY = {
@@ -1956,6 +1956,7 @@ function setRegion(region, silent = false) {
   const ch = $('#dv_chamber'), cp = $('#dv_chamberPh');
   if (ch && (!ch.dataset.userEdited || !ch.value)) ch.value = cfg.chamber;
   if (cp && (!cp.dataset.userEdited || !cp.value)) cp.value = cfg.phone;
+  const hd = $('#dv_hyperDoc'); if (hd && cfg.hyperDoc && !hd.value) hd.value = cfg.hyperDoc;
   updateHatOptions(cfg.hatRegion);
   const rn = $('#regNote');
   if (rn) rn.textContent = 'Governing documents: ' + LEG_CITATION[region] + ' · DCIEM tables & procedures';
