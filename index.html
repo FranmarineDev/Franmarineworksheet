@@ -760,6 +760,9 @@ body:has(.floatlog.open) .fab{display:none}
         <div class="dash-sub"><span class="muted" id="mgmtAsOf"></span></div>
       </div>
       <div class="dash-tools">
+        <div class="seg" id="mgmtRegionSeg" title="Show figures for one region or both">
+          <button data-region="ALL" class="active">Both</button><button data-region="NSW">East</button><button data-region="WA">West</button>
+        </div>
         <div class="seg" id="mgmtPeriod">
           <button data-period="7">7 days</button><button data-period="30" class="active">30 days</button><button data-period="90">Quarter</button>
         </div>
@@ -831,7 +834,6 @@ body:has(.floatlog.open) .fab{display:none}
           <span class="dash-status" id="dashStatus"></span>
           <label><input type="checkbox" id="showDone"> Show completed</label>
           <button class="link" data-act="refreshDash">↻ Refresh</button>
-          <span class="seg hidden" id="dashRegionSeg" title="Which region's jobs to show"><button data-region="NSW">East</button><button data-region="WA">West</button></span>
         </div>
         <div class="dash-filter hidden" id="doneFilter">
           <select id="doneMonth" title="Month the job finished on site"><option value="">All months</option></select>
@@ -3752,7 +3754,24 @@ function downloadRegisterCsv() {
  * Landing page for profiles with can_view_management. Figures come from one RPC
  * (mgmt_stats, security definer, flag-checked — see migration_v3.sql) so a manager
  * can read both regions' totals without loosening per-region RLS. */
-let mgmtPeriod = 30, mgmtData = null;
+let mgmtPeriod = 30, mgmtData = null, mgmtRegion = 'ALL';   // ALL | NSW | WA — view filter only; the RPC always returns both regions
+$('#mgmtRegionSeg').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  mgmtRegion = b.dataset.region; $$('#mgmtRegionSeg button').forEach(x => x.classList.toggle('active', x === b));
+  renderManagement();
+});
+/* The figures as seen through the region filter: one region's numbers only, the other side blanked, every list cut to that region. */
+function mgmtView(d) {
+  if (!d || mgmtRegion === 'ALL') return d;
+  const R = (mgmtRegion === 'NSW' ? d.east : d.west) || {};
+  const only = r => !r || !r.region || r.region === mgmtRegion;
+  return { ...d,
+    east: mgmtRegion === 'NSW' ? d.east : {}, west: mgmtRegion === 'WA' ? d.west : {},
+    days_since_lti: R.days_since_lti, reported_24h_pct: R.reported_24h_pct, avg_crew: R.avg_crew, signoff_24h_pct: R.signoff_24h_pct,
+    incident_register: (d.incident_register || []).filter(only), equipment_usage: (d.equipment_usage || []).filter(only),
+    open_audit: (d.open_audit || []).filter(only), signoff_by_supervisor: (d.signoff_by_supervisor || []).filter(only),
+    drill: Object.fromEntries(Object.entries(d.drill || {}).map(([k, v]) => [k, (v || []).filter(only)])) };
+}
 const REGIONS = [['NSW', 'East'], ['WA', 'West']];
 const fmtD = iso => iso ? new Date(iso + 'T00:00:00').toLocaleDateString('en-AU', { day: '2-digit', month: 'short' }) : '';
 
@@ -3787,7 +3806,8 @@ $('#mgmtPeriod').addEventListener('click', e => {
 
 /* Tile: value, East/West sub-line, severity stripe, drill-down key */
 function tile(key, label, val, east, west, sev = '') {
-  return `<button class="stat clickable ${sev}" data-act="drill" data-drill="${key}"><b>${esc(String(val))}</b><span>${esc(label)} ›</span><small>East ${esc(String(east ?? '—'))} · West ${esc(String(west ?? '—'))}</small></button>`;
+  const sub = mgmtRegion === 'NSW' ? 'East only' : mgmtRegion === 'WA' ? 'West only' : `East ${esc(String(east ?? '—'))} · West ${esc(String(west ?? '—'))}`;
+  return `<button class="stat clickable ${sev}" data-act="drill" data-drill="${key}"><b>${esc(String(val))}</b><span>${esc(label)} ›</span><small>${sub}</small></button>`;
 }
 const sevOf = (n, warnAt = 1, badAt = 3) => n >= badAt ? 'bad' : n >= warnAt ? 'warn' : 'ok';
 function tbl(el, heads, rows, empty = 'Nothing in this period.') {
@@ -3797,19 +3817,19 @@ const regBadge = r => `<span class="badge region">${esc(r)}</span>`;
 const ageBadge = d => { const n = Math.floor(d); return `<span class="badge ${n > 7 ? 'warn' : 'lock'}" style="white-space:nowrap">${n}d</span>`; };
 
 function renderManagement() {
-  const d = mgmtData; if (!d) { $('#tilesAudit').innerHTML = '<div class="muted">No figures yet — connect to load.</div>'; return; }
+  const d = mgmtView(mgmtData); if (!d) { $('#tilesAudit').innerHTML = '<div class="muted">No figures yet — connect to load.</div>'; return; }
   const E = d.east || {}, W = d.west || {}, T = k => (E[k] || 0) + (W[k] || 0);
-  $('#mgmtAsOf').textContent = `Last ${mgmtPeriod} days · as of ${new Date(d.as_of || Date.now()).toLocaleString('en-AU', { dateStyle: 'medium', timeStyle: 'short' })}`;
+  $('#mgmtAsOf').textContent = `${mgmtRegion === 'ALL' ? 'Both regions' : mgmtRegion === 'NSW' ? 'East (NSW) only' : 'West (WA) only'} · last ${mgmtPeriod} days · as of ${new Date(d.as_of || Date.now()).toLocaleString('en-AU', { dateStyle: 'medium', timeStyle: 'short' })}`;
   // banners
   const openInv = T('open_investigations'), unsigned = T('unsigned_48h');
   $('#mgmtIncBanner').classList.toggle('hidden', !openInv);
-  $('#mgmtIncBanner').innerHTML = `<b>⚠ ${openInv} open investigation${openInv === 1 ? '' : 's'}</b> — East ${E.open_investigations || 0} · West ${W.open_investigations || 0}`;
+  $('#mgmtIncBanner').innerHTML = `<b>⚠ ${openInv} open investigation${openInv === 1 ? '' : 's'}</b>${mgmtRegion === 'ALL' ? ` — East ${E.open_investigations || 0} · West ${W.open_investigations || 0}` : ''}`;
   const docsDue = docsNeedingReview(null);
   $('#mgmtAuditBanner').classList.toggle('hidden', !unsigned && !docsDue.length);
-  $('#mgmtAuditBanner').innerHTML = (unsigned ? `<b>${unsigned} day sheet${unsigned === 1 ? '' : 's'} unsigned for more than 48 h</b> — East ${E.unsigned_48h || 0} · West ${W.unsigned_48h || 0}` : '') +
+  $('#mgmtAuditBanner').innerHTML = (unsigned ? `<b>${unsigned} day sheet${unsigned === 1 ? '' : 's'} unsigned for more than 48 h</b>${mgmtRegion === 'ALL' ? ` — East ${E.unsigned_48h || 0} · West ${W.unsigned_48h || 0}` : ''}` : '') +
     (docsDue.length ? `${unsigned ? '<br>' : ''}📚 <b>${docsDue.length} controlled document${docsDue.length === 1 ? '' : 's'} due for review:</b> ${docsDue.map(x => esc(x.doc_no) + (docStatus(x) !== 'due' ? ' (overdue)' : '')).join(', ')} — <button class="link" data-act="drill" data-drill="docs_review">review now</button>` : '');
   // region cards
-  $('#regionCards').innerHTML = REGIONS.map(([r, name]) => { const s = r === 'NSW' ? E : W; return `
+  $('#regionCards').innerHTML = REGIONS.filter(([r]) => mgmtRegion === 'ALL' || r === mgmtRegion).map(([r, name]) => { const s = r === 'NSW' ? E : W; return `
     <div class="card region-card ${r.toLowerCase()}">
       <div class="card-head"><span class="badge region">${name.toUpperCase()} / ${r}</span>${s.unsigned_48h ? `<span class="badge warn">${s.unsigned_48h} unsigned</span>` : '<span class="badge ok">Up to date</span>'}${s.open_investigations ? `<span class="badge incident">⚠ ${s.open_investigations} open</span>` : ''}</div>
       <div class="card-title">${r} Jobs Dashboard</div>
@@ -3864,20 +3884,21 @@ function renderWeeklyChart(weeks) {
   const el = $('#weeklyChart'); if (!el) return;
   if (!weeks.length) { el.innerHTML = '<div class="muted">No data.</div>'; return; }
   const W = 520, H = 200, L = 34, B = 28, T = 12, Rr = 26;
-  const max = Math.max(4, ...weeks.flatMap(w => [w.east || 0, w.west || 0]));
+  const show = mgmtRegion === 'ALL' ? ['east', 'west'] : [mgmtRegion === 'NSW' ? 'east' : 'west'];
+  const max = Math.max(4, ...weeks.flatMap(w => show.map(k => w[k] || 0)));
   const x = i => L + i * (W - L - Rr) / Math.max(1, weeks.length - 1), y = v => T + (H - T - B) * (1 - v / max);
   const path = k => weeks.map((w, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(w[k] || 0).toFixed(1)}`).join(' ');
   const ticks = [0, Math.round(max / 2), max];
   el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" class="wk-chart" role="img" aria-label="Sheets per week, East vs West">
     ${ticks.map(t => `<line x1="${L}" x2="${W - Rr}" y1="${y(t)}" y2="${y(t)}" class="grid"/><text x="${L - 6}" y="${y(t) + 4}" class="tick" text-anchor="end">${t}</text>`).join('')}
-    <path d="${path('east')}" class="ln east"/><path d="${path('west')}" class="ln west"/>
-    ${weeks.map((w, i) => `<circle cx="${x(i)}" cy="${y(w.east || 0)}" r="3" class="pt east"/><circle cx="${x(i)}" cy="${y(w.west || 0)}" r="3" class="pt west"/><text x="${x(i)}" y="${H - 8}" class="tick" text-anchor="middle">${esc(w.label)}</text>`).join('')}
-  </svg><div class="wk-legend"><span><i class="east"></i>East</span><span><i class="west"></i>West</span></div>`;
+    ${show.map(k => `<path d="${path(k)}" class="ln ${k}"/>`).join('')}
+    ${weeks.map((w, i) => show.map(k => `<circle cx="${x(i)}" cy="${y(w[k] || 0)}" r="3" class="pt ${k}"/>`).join('') + `<text x="${x(i)}" y="${H - 8}" class="tick" text-anchor="middle">${esc(w.label)}</text>`).join('')}
+  </svg><div class="wk-legend">${show.map(k => `<span><i class="${k}"></i>${k === 'east' ? 'East' : 'West'}</span>`).join('')}</div>`;
 }
 
 /* Drill-down: rows behind a tile, or one incident */
 function openDrill(key) {
-  const d = mgmtData || {}; const m = $('#mgmtDrill'); let title = '', body = '';
+  const d = mgmtView(mgmtData) || {}; const m = $('#mgmtDrill'); let title = '', body = '';
   if (key.startsWith('inc:')) {
     const i = (d.incident_register || []).find(x => String(x.id) === key.slice(4)); if (!i) return;
     title = `${i.type} — ${i.job_no} · ${fmtD(i.ws_date)}`;
@@ -4536,8 +4557,7 @@ async function loadDashboard(manual = false) {
 
 function paintRegionSeg() {
   $('.dash-title').textContent = `Jobs — ${viewRegion}`;
-  const seg = $('#dashRegionSeg');
-  if (seg) { seg.classList.toggle('hidden', !me?.mgmt); seg.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.region === viewRegion)); }
+
   $('#jf_region').disabled = true;             // jobs are always created in your own region
 }
 const inRegion = r => !r || r === viewRegion;
@@ -4607,7 +4627,6 @@ function doneMatches(j) {
 }
 function clearDoneFilter() { $('#doneMonth').value = ''; $('#doneClient').value = ''; $('#doneSearch').value = ''; renderJobs(); }
 ['doneMonth', 'doneClient'].forEach(id => $('#' + id).addEventListener('change', renderJobs));
-$('#dashRegionSeg')?.addEventListener('click', e => { const r = e.target.closest('button')?.dataset.region; if (r && r !== viewRegion && me?.mgmt) enterRegion(r); });
 $('#doneSearch').addEventListener('input', renderJobs);
 
 function renderJobs() {
