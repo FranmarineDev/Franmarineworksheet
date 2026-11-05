@@ -106,3 +106,13 @@ Database: nothing to undo — all additions are nullable or defaulted and unused
 ## What changed (for the commit / Sam)
 
 Dashboard: bundled jobs with day cards, Manage menu, completed-jobs filter, new header. Worksheet: Project Overview tab first; 24-hour pickers; pinned payroll rows; drill alert; signature-warning modal; Quick Log sheet; client acknowledgement; close-out extra recipients. Compliance (WHS Reg 2025 Pt 4.8 / AS/NZS 2299.1): classification block, dive plan briefing + upload, fit-to-dive cert declaration, s 180 dive log order + incident field, s 181 per-dive verification with user/time stamps, vessel POB, MaintainX plant tick, notifiable-incident determination, void instead of delete, controlled-form footer + change log + export log, compliance check panel and PDF page. Management View for flagged users. Controlled-document register with review prompts and filing PDFs.
+
+---
+
+## v3.1 (Fri 6 Nov, after first-morning feedback)
+
+**Database first** — paste `supabase/migration_v31.sql` into the SQL editor and Run (safe to re-run). It adds incident withdrawal columns + status, lets management-flagged users see both regions, and excludes withdrawn incidents from `mgmt_stats`. The v3.1 page selects the new incident columns, so merge the app only after this has run.
+
+**App** — `git checkout main && git merge v3.1 && git push`.
+
+Changes: Withdraw button on incidents (reporter or manager, reason required; record kept, drops off the day, close-out and management figures); signature stamp reads "captured on <login>'s login" since crew sign on the supervisor's device; dive plan reference falls back to the PDF file name when it is not FUS-DIVE numbered, D-03 treats a missing revision as review not fail; Close-Out summary rebuilds every time the tab opens; East/West segment on the Jobs dashboard for management users.

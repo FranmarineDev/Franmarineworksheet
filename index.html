@@ -831,6 +831,7 @@ body:has(.floatlog.open) .fab{display:none}
           <span class="dash-status" id="dashStatus"></span>
           <label><input type="checkbox" id="showDone"> Show completed</label>
           <button class="link" data-act="refreshDash">↻ Refresh</button>
+          <span class="seg hidden" id="dashRegionSeg" title="Which region's jobs to show"><button data-region="NSW">East</button><button data-region="WA">West</button></span>
         </div>
         <div class="dash-filter hidden" id="doneFilter">
           <select id="doneMonth" title="Month the job finished on site"><option value="">All months</option></select>
@@ -1865,7 +1866,7 @@ function switchTab(tab) {
   activeTab = tab;
   $$('.page').forEach(p => p.classList.toggle('active', p.dataset.tab === tab));
   $$('.nav, .pill').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
-  if (tab === 'co') renderCompliance();
+  if (tab === 'co') { renderCloseoutSummary(); renderCompliance(); }
   if (window.innerWidth < 860) $('#sidebar').classList.remove('open');
   // Materialise any pending signatures on the newly-visible page
   $$(`#page-${tab} canvas[data-sig]`).forEach(c => {
@@ -2229,7 +2230,7 @@ function clearSig(id) {
   scheduleSave();
 }
 /* S1 / M4 — show who signed and when under each signature (s 181(5): electronic log entries carry user ID + time) */
-const fmtStamp = m => m?.at ? `${m.by || 'signed'} · ${new Date(m.at).toLocaleString('en-AU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}` : '';
+const fmtStamp = m => m?.at ? `captured on ${m.by || 'unknown'}'s login · ${new Date(m.at).toLocaleString('en-AU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}` : '';
 function paintSigStamp(canvas) {
   const row = canvas.closest('.sig-row'); if (!row) return;
   let s = row.querySelector('.sig-stamp');
@@ -2583,11 +2584,19 @@ async function handlePlanFile(file) {
   scheduleSave();
   flushFiles();
 }
+/* Plan No. / Rev from the PDF's file name: FUS-DIVE-26-014_RevB → both; anything else (e.g. a client "WO-… Dive Plan.pdf") → the file name is the reference */
+function planRefFromName(name) {
+  const n = String(name || '').replace(/\.pdf$/i, '').trim(); if (!n) return null;
+  const m = n.match(/(FUS-DIVE-\d{2}-\d{3})(?:[_\s-]*(?:Rev|R)?[_\s-]*([A-Z0-9]{1,2}))?/i);
+  if (m) return { no: m[1].toUpperCase(), rev: (m[2] || '').toUpperCase() };
+  const r = n.match(/\bRev(?:ision)?[\s_.-]*([A-Z0-9]{1,3})\b/i);
+  return { no: n.slice(0, 60), rev: r ? r[1].toUpperCase() : '' };
+}
 function fillPlanRefFromName(name) {
-  const m = (name || '').match(/(FUS-DIVE-\d{2}-\d{3})(?:[_\s-]*(?:Rev|R)?[_\s-]*([A-Z0-9]{1,2}))?/i);
+  const m = planRefFromName(name); if (!m) return;
   const no = $('#cl_divePlan'), rev = $('#cl_divePlanRev');
-  if (m && no && !no.value) { no.value = m[1].toUpperCase(); no.dispatchEvent(new Event('input', { bubbles: true })); }
-  if (m && m[2] && rev && !rev.value) { rev.value = m[2].toUpperCase(); rev.dispatchEvent(new Event('input', { bubbles: true })); }
+  if (no && !no.value) { no.value = m.no; no.dispatchEvent(new Event('input', { bubbles: true })); }
+  if (m.rev && rev && !rev.value) { rev.value = m.rev; rev.dispatchEvent(new Event('input', { bubbles: true })); }
 }
 function renderPlan() {
   const c = $('#planRender'); if (!c) return;
@@ -3406,7 +3415,7 @@ function buildDaySummaryData(st = buildStateObject(), job = currentJob || {}, in
     swms: f('swms_title') || st.swms?.name || '',
     dive_plan: st.plan?.name || f('cl_divePlan') || '',
     equipment: (st.equipment || []).map(e => e.item).filter(Boolean),
-    incidents: (incs || []).map(i => ({ severity: i.severity, type: i.type })),
+    incidents: (incs || []).filter(i => i.status !== 'withdrawn').map(i => ({ severity: i.severity, type: i.type })),
     progress: f('co_progress'), challenges: f('co_challenges'), improvements: f('co_improvements'), tomorrow: f('co_tomorrow'),
     issues: issuesFromState(st).filter(i => i !== 'Day close-out'),
     signed_off: !!currentWs?.locked
@@ -3997,7 +4006,9 @@ function complianceChecks(st = buildStateObject()) {
   add('D-02', 'Legislation citation current', 'pass', 'Minor', LEG_CITATION[st.region] || LEG_CITATION.NSW);
   { const m = miss([['Dive plan PDF attached', !!st.plan], ['Dive plan no.', f('cl_divePlan')], ['Dive plan rev', f('cl_divePlanRev')], ['Table set', f('cl_tables')], ['Chamber availability', f('cl_chamberCat')],
       ['Omitted-deco procedure briefed', f('tb_omittedDeco') === 'Yes'], ['Incapacitated-diver extraction briefed', f('tb_extraction') === 'Yes']]);
-    add('D-03', 'Dive plan complete & referenced (s 178, cl 3.1.4)', !diving ? 'na' : m.length ? 'fail' : 'pass', 'Major — statutory', m.length ? 'Missing: ' + m.join(', ') : `${f('cl_divePlan')} Rev ${f('cl_divePlanRev')}`); }
+    const onlyRev = m.length === 1 && m[0] === 'Dive plan rev';
+    add('D-03', 'Dive plan complete & referenced (s 178, cl 3.1.4)', !diving ? 'na' : onlyRev ? 'warn' : m.length ? 'fail' : 'pass', 'Major — statutory',
+      onlyRev ? `${f('cl_divePlan')} — revision not recorded (enter it in Project Overview)` : m.length ? 'Missing: ' + m.join(', ') : `${f('cl_divePlan')}${f('cl_divePlanRev') ? ' Rev ' + f('cl_divePlanRev') : ''}`); }
   { const first = dives.map(d => d.ls).filter(Boolean).sort()[0]; const bt = f('tb_planBriefTime'); let st_ = 'na', det = 'No dives logged';
     if (dives.length) {
       if (!bt) { st_ = 'fail'; det = 'No briefing time recorded (Toolbox tab)'; }
@@ -4212,6 +4223,7 @@ const ACT = {
   exportHours:       el => exportHoursCSV(el.dataset.job),
   removeIncPhoto:    el => { incPhotos.splice(+el.dataset.idx, 1); renderIncPhotos(); },
   ackIncident:       el => ackIncident(el.dataset.id),
+  withdrawIncident:  el => withdrawIncident(el.dataset.id),
   openIncJob:        el => openTodayWorksheet(el.dataset.job),
   toggleCrew:        () => { $('#crewPanel').classList.toggle('hidden'); ['#usersPanel', '#docsPanel'].forEach(id => $(id).classList.add('hidden')); renderCrew(); },
   toggleDocs:        () => { $('#docsPanel').classList.toggle('hidden'); ['#usersPanel', '#crewPanel', '#equipPanel'].forEach(id => $(id).classList.add('hidden')); loadDocs(); },
@@ -4495,7 +4507,7 @@ async function loadDashboard(manual = false) {
   let jobs = null;
   if (online()) {
     const { data, error } = await sb.from('jobs')
-      .select('*, worksheets(id, ws_date, updated_at, updated_by_name, supervisor, locked, summary, voided_at), incidents(id, ws_date, type, severity, status, description, reported_by_name, occurred_at, email_status, created_at)')
+      .select('*, worksheets(id, ws_date, updated_at, updated_by_name, supervisor, locked, summary, voided_at), incidents(id, ws_date, type, severity, status, description, reported_by_name, reported_by, occurred_at, email_status, created_at, withdrawn_by_name, withdrawn_at, withdraw_reason)')
       .order('created_at', { ascending:false });
     if (error) { banner.textContent = 'Could not load jobs: ' + error.message; banner.classList.remove('hidden'); }
     else { jobs = data; banner.classList.add('hidden'); try { localStorage.setItem(DASH_CACHE, JSON.stringify(jobs)); } catch (e) {} }
@@ -4524,6 +4536,8 @@ async function loadDashboard(manual = false) {
 
 function paintRegionSeg() {
   $('.dash-title').textContent = `Jobs — ${viewRegion}`;
+  const seg = $('#dashRegionSeg');
+  if (seg) { seg.classList.toggle('hidden', !me?.mgmt); seg.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.region === viewRegion)); }
   $('#jf_region').disabled = true;             // jobs are always created in your own region
 }
 const inRegion = r => !r || r === viewRegion;
@@ -4593,6 +4607,7 @@ function doneMatches(j) {
 }
 function clearDoneFilter() { $('#doneMonth').value = ''; $('#doneClient').value = ''; $('#doneSearch').value = ''; renderJobs(); }
 ['doneMonth', 'doneClient'].forEach(id => $('#' + id).addEventListener('change', renderJobs));
+$('#dashRegionSeg')?.addEventListener('click', e => { const r = e.target.closest('button')?.dataset.region; if (r && r !== viewRegion && me?.mgmt) enterRegion(r); });
 $('#doneSearch').addEventListener('input', renderJobs);
 
 function renderJobs() {
@@ -4930,9 +4945,9 @@ async function openTodayWorksheet(jobId) {
   if (!init.team.length && Array.isArray(job.crew) && job.crew.length) init.team = job.crew.slice();
   if (!init.swms && job.swms) { init.swms = normaliseEntry(job.swms, 'swms'); if (!init.fields.swms_title) init.fields.swms_title = (job.swms.name || '').replace(/\.pdf$/i, ''); }
   if (!init.plan && job.dive_plan) { init.plan = normaliseEntry(job.dive_plan, 'plan');
-    const m = (job.dive_plan.name || '').match(/(FUS-DIVE-\d{2}-\d{3})(?:[_\s-]*(?:Rev|R)?[_\s-]*([A-Z0-9]{1,2}))?/i);
-    if (m && !init.fields.cl_divePlan) init.fields.cl_divePlan = m[1].toUpperCase();
-    if (m && m[2] && !init.fields.cl_divePlanRev) init.fields.cl_divePlanRev = m[2].toUpperCase(); }
+    const m = planRefFromName(job.dive_plan.name);
+    if (m && !init.fields.cl_divePlan) init.fields.cl_divePlan = m.no;
+    if (m && m.rev && !init.fields.cl_divePlanRev) init.fields.cl_divePlanRev = m.rev; }
   const { data, error } = await sb.from('worksheets')
     .insert({ job_id: jobId, ws_date: today, supervisor: init.fields.da_supervisor || null,
               data: init, created_by: me.id, updated_by: me.id, updated_by_name: me.name })
@@ -5178,14 +5193,29 @@ function incCard(i, showJob = false) {
     <div class="meta">Reported by ${esc(i.reported_by_name || '')} · ${i.status === 'open' ? '<b style="color:var(--bad)">Open</b>' : i.status === 'acknowledged' ? `<b style="color:var(--ok)">Acknowledged</b> by ${esc(i.acknowledged_by_name || '')}` : 'Closed'}
       · email ${i.email_status === 'sent' ? 'sent' : i.email_status === 'failed' ? '<b style="color:var(--bad)">failed</b>' : 'pending'}</div>
     ${(i.photos || []).length ? `<div class="inc-photos">${i.photos.map(p => `<img data-ref="${esc(p)}" class="pending" alt="">`).join('')}</div>` : ''}
-    ${isManager() && i.status === 'open' ? `<div class="mt"><button class="btn sm" data-act="ackIncident" data-id="${i.id}">✓ Acknowledge</button></div>` : ''}
+    ${i.status !== 'withdrawn' && (isManager() || i.status === 'open') && (isManager() || i.reported_by === me?.id) ? `<div class="mt">${isManager() && i.status === 'open' ? `<button class="btn sm" data-act="ackIncident" data-id="${i.id}">✓ Acknowledge</button> ` : ''}<button class="btn sm ghost" data-act="withdrawIncident" data-id="${i.id}" title="Lodged by mistake — keeps the record but removes it from the day's incidents">Withdraw</button></div>` : ''}
   </div>`;
+}
+function incWithdrawnLine(i) {
+  return `<div class="inc-item withdrawn muted" style="opacity:.65;font-size:12px"><s>${esc(i.severity)} ${esc(i.type)}</s> — withdrawn by ${esc(i.withdrawn_by_name || '')}${i.withdrawn_at ? ' · ' + new Date(i.withdrawn_at).toLocaleString('en-AU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''}${i.withdraw_reason ? ' · ' + esc(i.withdraw_reason) : ''}</div>`;
+}
+async function withdrawIncident(id) {
+  const i = incidents.find(x => x.id === id) || Object.values(jobsById).flatMap(j => j.incidents || []).find(x => x.id === id);
+  if (!i) return;
+  const reason = prompt(`Withdraw this ${i.severity} ${i.type} report?\n\nUse this only for a report lodged by mistake (wrong sheet, duplicate, test). The record stays in the database marked withdrawn; it drops off the day's incidents, the close-out and the management figures.\n\nReason (required):`);
+  if (reason == null) return;
+  if (!reason.trim()) { toast('A reason is required', 2000); return; }
+  const { error } = await sb.from('incidents').update({ status: 'withdrawn', withdrawn_at: new Date().toISOString(), withdrawn_by_name: me.name, withdraw_reason: reason.trim() }).eq('id', id);
+  if (error) { toast('✗ ' + error.message, 2500); return; }
+  toast('Incident withdrawn');
+  if (currentWs) await loadIncidents(); else await loadDashboard();
 }
 function renderIncidents() {
   const c = $('#incList'); if (!c) return;
-  c.innerHTML = incidents.length ? incidents.map(i => incCard(i)).join('') : '<div class="muted">None reported.</div>';
+  const live = incidents.filter(i => i.status !== 'withdrawn'), gone = incidents.filter(i => i.status === 'withdrawn');
+  c.innerHTML = (live.length ? live.map(i => incCard(i)).join('') : '<div class="muted">None reported.</div>') + gone.map(incWithdrawnLine).join('');
   hydrateImages(c);
-  const n = incidents.filter(i => i.status === 'open').length;
+  const n = live.filter(i => i.status === 'open').length;
   $('#navInc')?.classList.toggle('alert', n > 0); $('#pillInc')?.classList.toggle('alert', n > 0);
 }
 function renderIncidentBanner() {
