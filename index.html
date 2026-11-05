@@ -786,12 +786,17 @@ body:has(.floatlog.open) .fab{display:none}
       <div class="region-cards" id="regionCards"></div>
     </div>
 
+    <div class="sec"><h2>Reporting <span class="muted" style="text-transform:none;font-weight:400">activity by region</span></h2><div class="stat-grid" id="tilesRep"></div>
+      <div class="mgmt-2col" style="margin-top:10px">
+        <div><h3 class="mgmt-h3">Most utilised divers</h3><div class="tbl-scroll"><table class="mgmt-tbl" id="topDivers"></table></div></div>
+        <div><h3 class="mgmt-h3">Most utilised supervisors</h3><div class="tbl-scroll"><table class="mgmt-tbl" id="topSupervisors"></table></div></div>
+      </div>
+      <h3 class="mgmt-h3">Quoted vs actual hours <span class="muted" style="text-transform:none;font-weight:400">jobs with quoted hours set — red = over quote</span></h3><div class="tbl-scroll"><table class="mgmt-tbl" id="quoteTracking"></table></div></div>
     <div class="sec"><h2>Audit <span class="muted" style="text-transform:none;font-weight:400">things that need chasing</span></h2><div class="stat-grid" id="tilesAudit"></div></div>
     <div class="sec"><h2>Incidents</h2><div class="stat-grid" id="tilesInc"></div>
       <h3 class="mgmt-h3">Incident register</h3><div class="tbl-scroll"><table class="mgmt-tbl" id="incRegister"></table></div></div>
     <div class="sec"><h2>Equipment <span class="muted" style="text-transform:none;font-weight:400">from "Equipment Used Onsite" on each sheet</span></h2><div class="stat-grid" id="tilesEquip"></div>
       <h3 class="mgmt-h3">Usage by item</h3><div class="tbl-scroll"><table class="mgmt-tbl" id="equipUsage"></table></div></div>
-    <div class="sec"><h2>Reporting <span class="muted" style="text-transform:none;font-weight:400">activity by region</span></h2><div class="stat-grid" id="tilesRep"></div></div>
 
     <div class="mgmt-2col">
       <div class="sec"><h2>Sheets submitted per week</h2><div id="weeklyChart"></div></div>
@@ -954,6 +959,11 @@ body:has(.floatlog.open) .fab{display:none}
         <label class="f"><span>Supervisor</span><input id="jf_supervisor" list="supervisorList" placeholder="Pick a user account" autocomplete="off"></label>
         <label class="f"><span>Client Contact</span><input id="jf_contact"></label>
         <label class="f"><span>Contact Number</span><input id="jf_contact_ph" type="tel"></label>
+      </div>
+      <div class="g3 mt mgr-only" style="border:1px dashed var(--border-2);border-radius:var(--r);padding:8px 10px;background:#fbfbfd">
+        <label class="f"><span>Quoted hours / day <span class="muted" style="text-transform:none;font-weight:400">(managers only)</span></span><input id="jf_quoted_hours_per_day" type="number" inputmode="decimal" step="0.5" min="0" placeholder="e.g. 10"></label>
+        <label class="f"><span>Quoted days</span><input id="jf_quoted_days" type="number" inputmode="numeric" step="1" min="0" placeholder="optional"></label>
+        <div class="muted" style="align-self:end;padding-bottom:10px">Only shown here and on the Management View. Days whose paid hours exceed this show as over quote in Reporting.</div>
       </div>
       <div class="f mt" style="display:block">
         <span>Crew on this job <span class="muted" style="text-transform:none;font-weight:400">— tick who's rostered; they're pre-filled as the team on the first day's worksheet (the supervisor can still change it on the day)</span></span>
@@ -3796,6 +3806,7 @@ function mgmtView(d) {
     days_since_lti: R.days_since_lti, reported_24h_pct: R.reported_24h_pct, avg_crew: R.avg_crew, signoff_24h_pct: R.signoff_24h_pct,
     incident_register: (d.incident_register || []).filter(only), equipment_usage: (d.equipment_usage || []).filter(only),
     open_audit: (d.open_audit || []).filter(only), signoff_by_supervisor: (d.signoff_by_supervisor || []).filter(only),
+    top_divers: (d.top_divers || []).filter(only), top_supervisors: (d.top_supervisors || []).filter(only), quote_tracking: (d.quote_tracking || []).filter(only),
     drill: Object.fromEntries(Object.entries(d.drill || {}).map(([k, v]) => [k, (v || []).filter(only)])) };
 }
 const REGIONS = [['NSW', 'East'], ['WA', 'West']];
@@ -3888,13 +3899,29 @@ function renderManagement() {
     tile('items_issues', 'Items with issues noted', T('items_issues'), E.items_issues, W.items_issues, sevOf(T('items_issues'))),
     tile('idle_30', 'Idle >30 days', T('idle_30'), E.idle_30, W.idle_30, sevOf(T('idle_30'), 1, 5)),
     tile('no_equipment', 'Sheets with no equipment listed', T('no_equipment'), E.no_equipment, W.no_equipment, sevOf(T('no_equipment')))].join('');
+  const avgDives = x => x.dive_days ? ((x.dives || 0) / x.dive_days).toFixed(1) : '—';
+  const ot = x => Number(x.overtime_hours || 0);
   $('#tilesRep').innerHTML = [
+    tile('running_jobs', 'Active jobs', T('running_jobs'), E.running_jobs, W.running_jobs, 'ok'),
+    tile('jobs_active', 'Jobs with activity', T('jobs_active'), E.jobs_active, W.jobs_active, 'ok'),
     tile('sheets', 'Day sheets submitted', T('sheets'), E.sheets, W.sheets, 'ok'),
+    tile('dive_mode', 'Dive / non-dive days', `${T('dive_days')} / ${T('nondive_days')}`, `${E.dive_days || 0} / ${E.nondive_days || 0}`, `${W.dive_days || 0} / ${W.nondive_days || 0}`, 'ok'),
+    tile('dive_mode', 'Dives logged', T('dives'), E.dives, W.dives, 'ok'),
+    tile('dive_mode', 'Avg dives per dive day', avgDives({ dives: T('dives'), dive_days: T('dive_days') }), avgDives(E), avgDives(W), 'ok'),
+    tile('divers_used', 'Divers used', T('divers_used'), E.divers_used, W.divers_used, 'ok'),
     tile('dive_hours', 'Dive hours', (T('dive_min') / 60).toFixed(1), ((E.dive_min || 0) / 60).toFixed(1), ((W.dive_min || 0) / 60).toFixed(1), 'ok'),
     tile('person_days', 'Person-days on site', T('person_days'), E.person_days, W.person_days, 'ok'),
-    tile('jobs_active', 'Jobs with activity', T('jobs_active'), E.jobs_active, W.jobs_active, 'ok'),
     tile('avg_crew', 'Avg crew per sheet', d.avg_crew ?? '—', E.avg_crew ?? '—', W.avg_crew ?? '—', 'ok'),
+    tile('overtime', 'Overtime hours (>8 h/day)', (ot(E) + ot(W)).toFixed(1), ot(E).toFixed(1), ot(W).toFixed(1), sevOf(ot(E) + ot(W), 8, 40)),
+    tile('over_quote', 'Days over quoted hours', T('over_quote_days'), E.over_quote_days, W.over_quote_days, sevOf(T('over_quote_days'), 1, 5)),
     tile('signoff_24h', 'Sign-off within 24h', `${d.signoff_24h_pct ?? '—'}%`, `${E.signoff_24h_pct ?? '—'}%`, `${W.signoff_24h_pct ?? '—'}%`, (d.signoff_24h_pct ?? 100) < 80 ? 'warn' : 'ok')].join('');
+  tbl($('#topDivers'), ['Diver', 'Region', 'Dives', 'Dive days', 'Jobs', 'Bottom time'], (d.top_divers || []).slice(0, 12).map(x => ({
+    cells: [esc(x.name), regBadge(x.region), String(x.dives), String(x.days), String(x.jobs), fmtHrs(x.bottom_min)] })), 'No dives logged in the period.');
+  tbl($('#topSupervisors'), ['Supervisor', 'Region', 'Day sheets', 'Jobs', 'Dives', 'Person-days'], (d.top_supervisors || []).slice(0, 12).map(x => ({
+    cells: [esc(x.supervisor), regBadge(x.region), String(x.sheets), String(x.jobs), String(x.dives), String(x.person_days)] })), 'No sheets in the period.');
+  tbl($('#quoteTracking'), ['Job', 'Region', 'Status', 'Quoted h/day', 'Quoted days', 'Quoted total', 'Days worked', 'Actual hours', 'Days over', 'vs quote'], (d.quote_tracking || []).map(q => ({
+    cells: [`<b>${esc(q.job_no)}</b> ${esc(q.project || '')}`, regBadge(q.region), esc(q.status || ''), String(q.quoted_hours_per_day), q.quoted_days != null ? String(q.quoted_days) : '<span class="muted">—</span>', q.quoted_total != null ? Number(q.quoted_total).toFixed(1) : '—', String(q.days), String(q.paid_hours),
+      q.days_over ? `<span class="badge warn">${q.days_over}</span>` : '0', q.over_pct == null ? '—' : q.over_pct > 0 ? `<b style="color:var(--bad)">+${q.over_pct}%</b>` : `<span style="color:var(--ok)">${q.over_pct}%</span>`] })), 'No jobs with quoted hours yet — set them on the job card (managers only).');
   // tables
   tbl($('#incRegister'), ['Date', 'Job', 'Region', 'Type', 'Class', 'What happened', 'Status'], (d.incident_register || []).map(i => ({ act: 'drill', attrs: `data-drill="inc:${esc(i.id)}"`,
     cells: [fmtD(i.ws_date), esc(i.job_no), regBadge(i.region), esc(i.type), esc(i.injury_class || '—'), esc((i.description || '').slice(0, 90)), `<span class="badge ${i.status === 'open' ? 'incident' : 'ok'}">${esc(i.status)}</span>`] })));
@@ -3938,8 +3965,9 @@ function openDrill(key) {
     const rows = docsForRegion(null).sort((a, b) => (a.next_review || '').localeCompare(b.next_review || ''));
     body = `<div class="tbl-scroll"><table class="mgmt-tbl"><thead><tr><th>Doc No.</th><th>Title</th><th>Rev</th><th>Region</th><th>Last review</th><th>Status</th><th></th></tr></thead><tbody>${rows.map(x => `<tr><td><b>${esc(x.doc_no)}</b></td><td>${esc(x.title)}</td><td>${esc(x.rev || '')}</td><td>${x.region ? regBadge(x.region) : 'Both'}</td><td>${x.last_review ? fmtD(x.last_review) + ' · ' + esc(x.last_review_by || '') : '—'}</td><td>${docBadge(x)}</td><td><button class="btn sm ghost" data-act="reviewDoc" data-id="${esc(x.id)}">✓ Record review</button></td></tr>`).join('')}</tbody></table></div>`;
   } else {
-    const rows = (d.drill || {})[key] || [];
-    const labels = { unsigned_48h: 'Unsigned day sheets >48h', no_toolbox: 'Sheets with no toolbox talk', no_swms: 'Sheets with no SWMS', missing_bt: 'Dive records missing bottom time', hazards: 'Hazards / near misses', edited_after_lock: 'Sheets edited after sign-off', voided: 'Voided sheets', incidents: 'Incidents', near_misses: 'Near misses', injuries: 'Injuries', open_investigations: 'Open investigations', actions_overdue: 'Corrective actions overdue', reported_24h: 'Reporting delay', spills: 'Environmental spills', items_used: 'Items used', dive_system_days: 'Dive system days', vessel_days: 'Vessel days', items_issues: 'Items with issues noted', idle_30: 'Idle equipment', no_equipment: 'Sheets with no equipment', sheets: 'Day sheets', dive_hours: 'Dive hours by sheet', person_days: 'Person-days', jobs_active: 'Jobs with activity', avg_crew: 'Crew per sheet', signoff_24h: 'Sign-off performance', days_since_lti: 'Lost-time injuries' };
+    const rows = key === 'divers_used' ? (d.top_divers || []).map(x => ({ diver: x.name, dives: x.dives, dive_days: x.days, jobs: x.jobs, bottom_time: fmtHrs(x.bottom_min), region: x.region }))
+      : (d.drill || {})[key] || [];
+    const labels = { running_jobs: 'Active jobs', dive_mode: 'Day sheets by mode', divers_used: 'Divers used', overtime: 'Overtime — paid time beyond 8 h per person per day', over_quote: 'Days over quoted hours', unsigned_48h: 'Unsigned day sheets >48h', no_toolbox: 'Sheets with no toolbox talk', no_swms: 'Sheets with no SWMS', missing_bt: 'Dive records missing bottom time', hazards: 'Hazards / near misses', edited_after_lock: 'Sheets edited after sign-off', voided: 'Voided sheets', incidents: 'Incidents', near_misses: 'Near misses', injuries: 'Injuries', open_investigations: 'Open investigations', actions_overdue: 'Corrective actions overdue', reported_24h: 'Reporting delay', spills: 'Environmental spills', items_used: 'Items used', dive_system_days: 'Dive system days', vessel_days: 'Vessel days', items_issues: 'Items with issues noted', idle_30: 'Idle equipment', no_equipment: 'Sheets with no equipment', sheets: 'Day sheets', dive_hours: 'Dive hours by sheet', person_days: 'Person-days', jobs_active: 'Jobs with activity', avg_crew: 'Crew per sheet', signoff_24h: 'Sign-off performance', days_since_lti: 'Lost-time injuries' };
     title = labels[key] || key;
     body = rows.length ? `<div class="tbl-scroll"><table class="mgmt-tbl"><thead><tr>${Object.keys(rows[0]).filter(k => !/^(id|region)$/.test(k)).map(k => `<th>${esc(k.replace(/_/g, ' '))}</th>`).join('')}<th>Region</th></tr></thead><tbody>${rows.map(r => `<tr>${Object.entries(r).filter(([k]) => !/^(id|region)$/.test(k)).map(([k, v]) => `<td>${/date|used|at$/.test(k) && /^\d{4}-\d{2}-\d{2}/.test(String(v)) ? fmtD(String(v).slice(0, 10)) : esc(String(v ?? ''))}</td>`).join('')}<td>${regBadge(r.region || '')}</td></tr>`).join('')}</tbody></table></div>
       <div class="flex mt" style="gap:8px;flex-wrap:wrap"><button class="btn sm ghost" data-act="remindSupervisors" data-key="${esc(key)}">✉ Send reminder to supervisors</button><button class="btn sm" data-act="enterRegion" data-region="NSW">📋 East paperwork</button><button class="btn sm" data-act="enterRegion" data-region="WA">📋 West paperwork</button></div>`
@@ -3979,6 +4007,14 @@ function buildMonthlyReportPDF(d) {
     .map(([l, k, div]) => [l, String(((E[k] || 0) / (div || 1)).toFixed(div ? 1 : 0)), String(((W[k] || 0) / (div || 1)).toFixed(div ? 1 : 0)), String((T(k) / (div || 1)).toFixed(div ? 1 : 0)), d.prev?.[k] != null ? (T(k) - d.prev[k] >= 0 ? '+' : '') + ((T(k) - d.prev[k]) / (div || 1)).toFixed(div ? 1 : 0) : '—']);
   K.table(['Measure', 'East', 'West', 'Total', 'vs previous month'], rowsC, [0, 24, 24, 24, 36]);
   K.sub('Sheets per week'); K.table(['Week', 'East', 'West', 'Total'], (d.weekly || []).map(w => [w.label, String(w.east || 0), String(w.west || 0), String((w.east || 0) + (w.west || 0))]), [0, 30, 30, 30]);
+  K.sub('Activity'); K.table(['Measure', 'East', 'West', 'Total'], [
+    ['Active jobs', E.running_jobs, W.running_jobs, T('running_jobs')], ['Dive days / non-dive days', `${E.dive_days || 0} / ${E.nondive_days || 0}`, `${W.dive_days || 0} / ${W.nondive_days || 0}`, `${T('dive_days')} / ${T('nondive_days')}`],
+    ['Dives logged', E.dives, W.dives, T('dives')], ['Avg dives per dive day', E.dive_days ? ((E.dives || 0) / E.dive_days).toFixed(1) : '-', W.dive_days ? ((W.dives || 0) / W.dive_days).toFixed(1) : '-', T('dive_days') ? (T('dives') / T('dive_days')).toFixed(1) : '-'],
+    ['Divers used', E.divers_used, W.divers_used, T('divers_used')], ['Overtime hours (>8 h/day)', E.overtime_hours, W.overtime_hours, (Number(E.overtime_hours || 0) + Number(W.overtime_hours || 0)).toFixed(1)],
+    ['Days over quoted hours', E.over_quote_days, W.over_quote_days, T('over_quote_days')]].map(r => r.map(v => String(v ?? 0))), [0, 24, 24, 24]);
+  K.sub('Most utilised divers'); K.table(['Diver', 'Region', 'Dives', 'Dive days', 'Jobs', 'Bottom time'], (d.top_divers || []).slice(0, 10).map(x => [x.name, x.region, String(x.dives), String(x.days), String(x.jobs), fmtHrs(x.bottom_min)]), [0, 16, 16, 20, 16, 24]);
+  K.sub('Most utilised supervisors'); K.table(['Supervisor', 'Region', 'Day sheets', 'Jobs', 'Dives', 'Person-days'], (d.top_supervisors || []).slice(0, 10).map(x => [x.supervisor, x.region, String(x.sheets), String(x.jobs), String(x.dives), String(x.person_days)]), [0, 16, 22, 16, 16, 24]);
+  K.sub('Quoted vs actual hours'); K.table(['Job', 'Region', 'Quoted h/day', 'Quoted days', 'Days', 'Actual h', 'Days over', 'vs quote'], (d.quote_tracking || []).map(q => [`${q.job_no} ${q.project || ''}`, q.region, String(q.quoted_hours_per_day), q.quoted_days != null ? String(q.quoted_days) : '-', String(q.days), String(q.paid_hours), String(q.days_over), q.over_pct == null ? '-' : (q.over_pct > 0 ? '+' : '') + q.over_pct + '%']), [0, 14, 20, 20, 14, 16, 18, 18]);
   K.band('Audit');
   K.table(['Item', 'East', 'West', 'Total'], [['Unsigned >48h', 'unsigned_48h'], ['No toolbox talk', 'no_toolbox'], ['No SWMS', 'no_swms'], ['Dive records missing bottom time', 'missing_bt'], ['Edited after sign-off', 'edited_after_lock'], ['Voided', 'voided']].map(([l, k]) => [l, String(E[k] || 0), String(W[k] || 0), String(T(k))]), [0, 24, 24, 24]);
   K.sub('Open items at month end'); K.table(['Age (d)', 'Item', 'Job / date', 'Region', 'Supervisor'], (d.open_audit || []).map(a => [String(Math.floor(a.age_days)), a.item, `${a.job_no} · ${a.ws_date}`, a.region, a.supervisor || '']), [16, 0, 40, 16, 36]);
@@ -4736,6 +4772,7 @@ function showJobForm(job) {
   $('#jf_id').value = job?.id || '';
   for (const k of ['job_no','project','region','client','location','vessel','start_date','supervisor','contact','contact_ph'])
     $('#jf_' + k).value = job?.[k] ?? (k === 'region' ? me.region : '');
+  $('#jf_quoted_hours_per_day').value = job?.quoted_hours_per_day ?? ''; $('#jf_quoted_days').value = job?.quoted_days ?? '';
   $('#jobForm').dataset.prevSupervisor = job?.supervisor || '';
   jobSwms = job?.swms ? normaliseEntry(job.swms, 'swms') : null; jobSwmsDirty = false; paintJobSwms();
   jobPlan = job?.dive_plan ? normaliseEntry(job.dive_plan, 'plan') : null; jobPlanDirty = false; paintJobPlan();
@@ -4754,6 +4791,8 @@ async function saveJob() {
   const row = {};
   for (const k of ['job_no','project','region','client','location','vessel','start_date','supervisor','contact','contact_ph'])
     row[k] = $('#jf_' + k).value.trim() || null;
+  row.quoted_hours_per_day = $('#jf_quoted_hours_per_day').value === '' ? null : +$('#jf_quoted_hours_per_day').value;
+  row.quoted_days = $('#jf_quoted_days').value === '' ? null : Math.round(+$('#jf_quoted_days').value);
   row.crew = pickedJobCrew();
   if (!row.job_no || !row.project) { $('#jobErr').textContent = 'Job No. and Project are required.'; return; }
   if (!online()) { $('#jobErr').textContent = 'You are offline — jobs can only be added when connected.'; return; }

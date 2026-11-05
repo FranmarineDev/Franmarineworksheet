@@ -9,6 +9,7 @@ create or replace function public.mgmt_stats(period_days int default 30)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare
   ok boolean; since date := current_date - period_days; res jsonb := '{}'::jsonb; r text; reg jsonb;
+  ot_std constant int := 480;   -- paid minutes per person per day before overtime counts (8 h)
 begin
   select can_view_management into ok from profiles where id = auth.uid();
   if not coalesce(ok, false) then raise exception 'management access required'; end if;
@@ -52,7 +53,17 @@ begin
       'person_days',   (select coalesce(sum(jsonb_array_length(coalesce(w.data->'team','[]'::jsonb))),0) from worksheets w join jobs j on j.id = w.job_id where j.region = r and w.ws_date >= since),
       'jobs_active',   (select count(distinct w.job_id) from worksheets w join jobs j on j.id = w.job_id where j.region = r and w.ws_date >= since),
       'avg_crew',      (select round(avg(jsonb_array_length(coalesce(w.data->'team','[]'::jsonb))),1) from worksheets w join jobs j on j.id = w.job_id where j.region = r and w.ws_date >= since),
-      'signoff_24h_pct', (select coalesce(round(100.0 * count(*) filter (where w.locked_at <= w.created_at + interval '24 hours') / nullif(count(*) filter (where w.locked),0)), 0) from worksheets w join jobs j on j.id = w.job_id where j.region = r and w.ws_date >= since)
+      'signoff_24h_pct', (select coalesce(round(100.0 * count(*) filter (where w.locked_at <= w.created_at + interval '24 hours') / nullif(count(*) filter (where w.locked),0)), 0) from worksheets w join jobs j on j.id = w.job_id where j.region = r and w.ws_date >= since),
+      'dive_days',     (select count(*) from worksheets w join jobs j on j.id = w.job_id where j.region = r and w.ws_date >= since and w.voided_at is null and coalesce(w.data->>'divingMode','true') <> 'false'),
+      'nondive_days',  (select count(*) from worksheets w join jobs j on j.id = w.job_id where j.region = r and w.ws_date >= since and w.voided_at is null and coalesce(w.data->>'divingMode','true') = 'false'),
+      'dives',         (select coalesce(sum(case when w.summary->>'dives' ~ '^\d+$' then (w.summary->>'dives')::int else 0 end),0) from worksheets w join jobs j on j.id = w.job_id where j.region = r and w.ws_date >= since and w.voided_at is null),
+      'divers_used',   (select count(distinct w.data->'fields'->>format('diver_%s_name', i)) from worksheets w join jobs j on j.id = w.job_id, generate_series(0,7) i
+                          where j.region = r and w.ws_date >= since and w.voided_at is null and coalesce(w.data->'fields'->>format('diver_%s_name', i),'') <> ''
+                            and exists (select 1 from generate_series(0,5) s where coalesce(w.data->'fields'->>format('d%ss%s_leftSurf', i, s),'') <> '')),
+      'overtime_hours',(select coalesce(round(sum(greatest(0, case when w.summary->>'paid_min' ~ '^\d+$' then (w.summary->>'paid_min')::int else 0 end - ot_std) * greatest(1, jsonb_array_length(coalesce(w.data->'team','[]'::jsonb)))) / 60.0, 1), 0)
+                          from worksheets w join jobs j on j.id = w.job_id where j.region = r and w.ws_date >= since and w.voided_at is null),
+      'over_quote_days', (select count(*) from worksheets w join jobs j on j.id = w.job_id where j.region = r and w.ws_date >= since and w.voided_at is null and j.quoted_hours_per_day is not null
+                          and case when w.summary->>'paid_min' ~ '^\d+$' then (w.summary->>'paid_min')::int else 0 end > j.quoted_hours_per_day * 60)
     ) into reg;
     res := res || jsonb_build_object(case when r = 'NSW' then 'east' else 'west' end, reg);
   end loop;
@@ -74,6 +85,28 @@ begin
                     from worksheets w join jobs j on j.id = w.job_id where w.locked = false and w.voided_at is null and w.created_at < now() - interval '48 hours'),
     'weekly', (select coalesce(jsonb_agg(jsonb_build_object('label', to_char(wk, 'DD Mon'), 'east', (select count(*) from worksheets w join jobs j on j.id = w.job_id where j.region = 'NSW' and w.ws_date >= wk::date and w.ws_date < wk::date + 7), 'west', (select count(*) from worksheets w join jobs j on j.id = w.job_id where j.region = 'WA' and w.ws_date >= wk::date and w.ws_date < wk::date + 7)) order by wk), '[]'::jsonb)
                from generate_series(date_trunc('week', current_date)::date - 49, date_trunc('week', current_date)::date, interval '7 days') wk),
+    'top_divers', (select coalesce(jsonb_agg(row order by (row->>'dives')::int desc, (row->>'bottom_min')::int desc), '[]'::jsonb) from (
+                     select jsonb_build_object('name', x.n, 'region', j.region, 'dives', count(*), 'days', count(distinct w.id), 'jobs', count(distinct w.job_id),
+                                               'bottom_min', sum(case when x.bt ~ '^\d+$' then x.bt::int else 0 end)) row
+                     from worksheets w join jobs j on j.id = w.job_id, generate_series(0,7) i, generate_series(0,5) s,
+                          lateral (select w.data->'fields'->>format('diver_%s_name', i) n, w.data->'fields'->>format('d%ss%s_leftSurf', i, s) ls, w.data->'fields'->>format('d%ss%s_totalBottom', i, s) bt) x
+                     where w.ws_date >= since and w.voided_at is null and coalesce(x.n,'') <> '' and coalesce(x.ls,'') <> ''
+                     group by x.n, j.region) t),
+    'top_supervisors', (select coalesce(jsonb_agg(row order by (row->>'sheets')::int desc), '[]'::jsonb) from (
+                     select jsonb_build_object('supervisor', w.supervisor, 'region', j.region, 'sheets', count(*), 'jobs', count(distinct w.job_id),
+                                               'dives', coalesce(sum(case when w.summary->>'dives' ~ '^\d+$' then (w.summary->>'dives')::int else 0 end),0),
+                                               'person_days', coalesce(sum(jsonb_array_length(coalesce(w.data->'team','[]'::jsonb))),0)) row
+                     from worksheets w join jobs j on j.id = w.job_id where w.ws_date >= since and w.voided_at is null and w.supervisor is not null group by w.supervisor, j.region) t),
+    'quote_tracking', (select coalesce(jsonb_agg(row order by (row->>'over_pct')::numeric desc nulls last), '[]'::jsonb) from (
+                     select jsonb_build_object('job_no', j.job_no, 'project', j.project, 'region', j.region, 'status', j.status, 'supervisor', j.supervisor,
+                                               'quoted_hours_per_day', j.quoted_hours_per_day, 'quoted_days', j.quoted_days,
+                                               'days', count(w.id), 'paid_hours', round(sum(case when w.summary->>'paid_min' ~ '^\d+$' then (w.summary->>'paid_min')::int else 0 end) / 60.0, 1),
+                                               'days_over', count(*) filter (where case when w.summary->>'paid_min' ~ '^\d+$' then (w.summary->>'paid_min')::int else 0 end > j.quoted_hours_per_day * 60),
+                                               'quoted_total', j.quoted_hours_per_day * coalesce(j.quoted_days, count(w.id)),
+                                               'over_pct', round(100.0 * sum(case when w.summary->>'paid_min' ~ '^\d+$' then (w.summary->>'paid_min')::int else 0 end) / 60.0 / nullif(j.quoted_hours_per_day * coalesce(j.quoted_days, count(w.id)), 0) - 100, 0)) row
+                     from jobs j join worksheets w on w.job_id = j.id and w.voided_at is null
+                     where j.quoted_hours_per_day is not null and exists (select 1 from worksheets w2 where w2.job_id = j.id and w2.ws_date >= since)
+                     group by j.id) t),
     'signoff_by_supervisor', (select coalesce(jsonb_agg(jsonb_build_object('supervisor', s.supervisor, 'region', s.region, 'sheets', s.n, 'pct', s.pct)), '[]'::jsonb) from (
                      select w.supervisor, j.region, count(*) n, coalesce(round(100.0 * count(*) filter (where w.locked_at <= w.created_at + interval '24 hours') / nullif(count(*) filter (where w.locked),0)),0) pct
                      from worksheets w join jobs j on j.id = w.job_id where w.ws_date >= since and w.supervisor is not null group by w.supervisor, j.region) s),
@@ -84,7 +117,16 @@ begin
       'edited_after_lock', (select coalesce(jsonb_agg(jsonb_build_object('job', j.job_no, 'date', w.ws_date, 'by', c->>'by', 'reason', c->>'reason', 'at', c->>'at', 'region', j.region)), '[]'::jsonb) from worksheets w join jobs j on j.id = w.job_id, jsonb_array_elements(coalesce(w.data->'changeLog','[]'::jsonb)) c where w.ws_date >= since and c->>'action' = 'Unlocked'),
       'voided', (select coalesce(jsonb_agg(jsonb_build_object('job', j.job_no, 'date', w.ws_date, 'by', w.voided_by_name, 'reason', w.void_reason, 'region', j.region)), '[]'::jsonb) from worksheets w join jobs j on j.id = w.job_id where w.voided_at >= since),
       'open_investigations', (select coalesce(jsonb_agg(jsonb_build_object('job', j.job_no, 'date', x.ws_date, 'type', x.type, 'severity', x.severity, 'reported_by', x.reported_by_name, 'region', j.region)), '[]'::jsonb) from incidents x join jobs j on j.id = x.job_id where coalesce(x.status,'') <> 'withdrawn' and x.status = 'open'),
-      'no_equipment', (select coalesce(jsonb_agg(jsonb_build_object('job', j.job_no, 'date', w.ws_date, 'supervisor', w.supervisor, 'region', j.region) order by w.ws_date desc), '[]'::jsonb) from worksheets w join jobs j on j.id = w.job_id where w.ws_date >= since and w.voided_at is null and jsonb_array_length(coalesce(w.data->'equipment','[]'::jsonb)) = 0)
+      'no_equipment', (select coalesce(jsonb_agg(jsonb_build_object('job', j.job_no, 'date', w.ws_date, 'supervisor', w.supervisor, 'region', j.region) order by w.ws_date desc), '[]'::jsonb) from worksheets w join jobs j on j.id = w.job_id where w.ws_date >= since and w.voided_at is null and jsonb_array_length(coalesce(w.data->'equipment','[]'::jsonb)) = 0),
+      'dive_mode', (select coalesce(jsonb_agg(jsonb_build_object('job', j.job_no, 'date', w.ws_date, 'mode', case when coalesce(w.data->>'divingMode','true') = 'false' then 'Non-diving' else 'Diving' end, 'dives', coalesce(w.summary->>'dives','0'), 'supervisor', w.supervisor, 'region', j.region) order by w.ws_date desc), '[]'::jsonb)
+                     from worksheets w join jobs j on j.id = w.job_id where w.ws_date >= since and w.voided_at is null),
+      'running_jobs', (select coalesce(jsonb_agg(jsonb_build_object('job', j.job_no, 'project', j.project, 'client', j.client, 'supervisor', j.supervisor, 'started', j.start_date, 'region', j.region) order by j.start_date desc nulls last), '[]'::jsonb) from jobs j where j.status = 'active'),
+      'overtime', (select coalesce(jsonb_agg(jsonb_build_object('job', j.job_no, 'date', w.ws_date, 'crew', greatest(1, jsonb_array_length(coalesce(w.data->'team','[]'::jsonb))), 'paid_hours', round(x.pm / 60.0, 1), 'ot_hours', round((x.pm - ot_std) * greatest(1, jsonb_array_length(coalesce(w.data->'team','[]'::jsonb))) / 60.0, 1), 'supervisor', w.supervisor, 'region', j.region) order by w.ws_date desc), '[]'::jsonb)
+                     from worksheets w join jobs j on j.id = w.job_id, lateral (select case when w.summary->>'paid_min' ~ '^\d+$' then (w.summary->>'paid_min')::int else 0 end pm) x
+                     where w.ws_date >= since and w.voided_at is null and x.pm > ot_std),
+      'over_quote', (select coalesce(jsonb_agg(jsonb_build_object('job', j.job_no, 'date', w.ws_date, 'quoted_h_day', j.quoted_hours_per_day, 'paid_hours', round(x.pm / 60.0, 1), 'over_by_h', round((x.pm - j.quoted_hours_per_day * 60) / 60.0, 1), 'supervisor', w.supervisor, 'region', j.region) order by w.ws_date desc), '[]'::jsonb)
+                     from worksheets w join jobs j on j.id = w.job_id, lateral (select case when w.summary->>'paid_min' ~ '^\d+$' then (w.summary->>'paid_min')::int else 0 end pm) x
+                     where w.ws_date >= since and w.voided_at is null and j.quoted_hours_per_day is not null and x.pm > j.quoted_hours_per_day * 60)
     )
   );
   return res;
