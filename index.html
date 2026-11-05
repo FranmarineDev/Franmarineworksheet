@@ -4718,7 +4718,7 @@ function showJobForm(job) {
   paintJobCrewPick(job?.crew || []);
   fillSupervisorList();
   $('#jobErr').textContent = '';
-  $('#deleteJobBtn').classList.toggle('hidden', !job || (job.worksheets || []).length > 0);
+  $('#deleteJobBtn').classList.toggle('hidden', !job || !isManager() || (job.worksheets || []).some(w => !w.voided_at));   // deletable once every day sheet is voided (or none exist)
   $('#jobForm').scrollIntoView({ behavior:'smooth', block:'start' });
   if (!job) $('#jf_job_no').focus();
 }
@@ -4854,12 +4854,16 @@ async function fillSupervisorList() {
 
 async function deleteJob() {
   const id = $('#jf_id').value; if (!id) return;
-  if (!confirm('Delete this job? (Only jobs with no worksheets can be deleted.)')) return;
-  const { error } = await sb.from('jobs').delete().eq('id', id);
+  const j = jobsById[id]; const voided = (j?.worksheets || []).filter(w => w.voided_at).length;
+  if (!confirm(`Delete job ${j?.job_no || ''}?\n\nOnly a job with no live day sheets can be deleted${voided ? ` — its ${voided} voided sheet(s), their files and any incidents on it go with it` : ''}. This cannot be undone.`)) return;
+  const { data, error } = await sb.from('jobs').delete().eq('id', id).select('id');
   if (error) { $('#jobErr').textContent = error.message; return; }
-  try {   // tidy up the job's SWMS files
-    const { data: files } = await sb.storage.from(BUCKET).list(`job/${id}/swms`);
-    if (files?.length) await sb.storage.from(BUCKET).remove(files.map(f => `job/${id}/swms/${f.name}`));
+  if (!data?.length) { $('#jobErr').textContent = 'Not deleted — the job still has a live day sheet, or you are not a manager for this region.'; return; }
+  try {   // tidy up the job's files (SWMS, dive plan, voided sheets' uploads)
+    const paths = []; const walk = async pre => { const { data: items } = await sb.storage.from(BUCKET).list(pre, { limit: 1000 }); for (const it of (items || [])) { if (it.id) paths.push(`${pre}/${it.name}`); else await walk(`${pre}/${it.name}`); } };
+    await walk(`job/${id}`);
+    for (const w of (j?.worksheets || [])) await walk(String(w.id));   // voided sheets' photos, close-out and drill PDFs
+    for (let i = 0; i < paths.length; i += 100) await sb.storage.from(BUCKET).remove(paths.slice(i, i + 100));
   } catch (e) { console.warn('job file cleanup failed', e); }
   hideJobForm(); await loadDashboard();
 }
