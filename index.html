@@ -1683,7 +1683,7 @@ function pageCloseout() {
     </div>
 
     <div class="sec">
-      <h2>Send close-out</h2>
+      <h2>Send close-out &amp; sign off</h2>
       <div class="g2 mb">
         ${F('co_extraTo', 'Also send to (optional)', { type:'text', pl:'client@example.com, pm@contractor.com.au' })}
         <div class="muted" style="align-self:end;padding-bottom:10px">Goes to the ${esc(currentJob?.region || '')} managers as always. Add client or stakeholder addresses here, comma-separated — they are CC'd on this day's close-out only and recorded on the report.</div>
@@ -1694,6 +1694,10 @@ function pageCloseout() {
         <span class="muted" id="coStatus"></span>
       </div>
       <div id="coSent" class="mt"></div>
+      <div class="flex mt" style="gap:12px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:12px">
+        <button class="btn" data-act="lockWs" id="coLockBtn">🔒 Sign off &amp; lock this day</button>
+        <span class="muted" id="coLockNote">Last step of the day — check the compliance panel above first. Locking makes this sheet the controlled record; a manager can unlock with a reason.</span>
+      </div>
     </div>
   </section>`;
 }
@@ -2940,6 +2944,7 @@ async function _applyState(s) {
   // Sign-on rows match current teamMembers (declaration ticks live inside those rows, so apply them after)
   refreshAllSigns();
   if (s.fields) for (const [id, val] of Object.entries(s.fields)) if (id.startsWith('decl_')) { const el = document.getElementById(id); if (el) el.checked = val === 'on' || val === true; }
+  if (planFile?.name && !currentWs?.locked && !($('#cl_divePlan')?.value || '').trim()) fillPlanRefFromName(planFile.name);   // plan attached before the reference auto-fill existed
 
   // Signatures — immediate if visible, defer via dataset.pending otherwise
   if (s.sigs) for (const [sigId, src] of Object.entries(s.sigs)) {
@@ -5002,6 +5007,9 @@ function applyLock() {
   const locked = !!currentWs?.locked;
   $('#appView').classList.toggle('locked', locked);
   $('#lockBtn').classList.toggle('hidden', locked);
+  $('#coLockBtn')?.classList.toggle('hidden', locked);
+  const ln = $('#coLockNote'); if (ln && !locked) ln.textContent = 'Last step of the day — check the compliance panel above first. Locking makes this sheet the controlled record; a manager can unlock with a reason.';
+  if (ln && locked) ln.innerHTML = `🔒 Signed off by ${esc(currentWs.lockedBy || 'supervisor')}${currentWs.lockedAt ? ' · ' + new Date(currentWs.lockedAt).toLocaleString('en-AU', { dateStyle: 'short', timeStyle: 'short' }) : ''}`;
   $$('#optMenu .edit-only').forEach(el => el.classList.toggle('hidden', locked));
   $('#unlockBtn').classList.toggle('hidden', !(locked && isManager()));
   const b = $('#lockBanner');
@@ -5342,6 +5350,7 @@ async function sendCloseout() {
     if (fnErr) throw fnErr; if (data?.error) throw new Error(data.error);
     $('#coStatus').textContent = `✓ Sent to ${(data.to || []).join(', ')}${(data.cc || []).length ? ' · cc ' + data.cc.join(', ') : ''}`;
     toast('📧 Close-out sent', 2500); await loadCloseoutReports();
+    if (!currentWs.locked && confirm('Close-out sent.\n\nSign off & lock this day sheet now? (Last step — a manager can unlock it with a reason.)')) { btn.disabled = false; await lockWorksheet(); }
   } catch (e) {
     console.warn(e); $('#coStatus').textContent = '✗ ' + (e.message || e);
     alert('Could not send the close-out: ' + (e.message || e) + '\n\nYour notes are saved on the sheet; try again shortly.');
