@@ -35,6 +35,7 @@ function summaryHTML(d: any): string {
     head("Challenges faced") + para(d.challenges) +
     head("Improvement suggestions") + para(d.improvements) +
     (d.tomorrow ? head("Plan for tomorrow") + para(d.tomorrow) : "") +
+    (d.client_ack ? head("Client acknowledgement") + para(d.client_ack) : "") +
     ((d.issues ?? []).length ? `<div style="margin-top:12px;padding:8px 12px;border:1px solid #f0c36d;background:#fff8e6;border-radius:4px;font-size:12px"><b>Still missing on the sheet:</b> ${esc(d.issues.join(", "))}</div>` : `<div style="margin-top:12px;color:#27ae60;font-size:12px"><b>✓ Sheet complete</b></div>`);
 }
 
@@ -59,7 +60,10 @@ Deno.serve(async (req) => {
     const region = rep.jobs?.region;
     const { data: mgrs } = await admin.from("profiles").select("email").eq("role", "manager").eq("region", region);
     const to = (mgrs ?? []).map((m) => m.email).filter(Boolean);
-    const cc = (Deno.env.get("CLOSEOUT_CC") ?? "").split(",").map((s) => s.trim()).filter((e) => e && !to.includes(e));
+    // CC = standing CLOSEOUT_CC secret + any addresses the supervisor added on this day's sheet (client / stakeholders)
+    const extra = Array.isArray(rep.extra_to) ? rep.extra_to : [];
+    const cc = [...(Deno.env.get("CLOSEOUT_CC") ?? "").split(","), ...extra]
+      .map((s) => String(s).trim()).filter((e, i, a) => e && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e) && !to.includes(e) && a.indexOf(e) === i);
     if (!to.length) { await admin.from("closeout_reports").update({ email_status: "failed", email_error: `no managers in ${region}` }).eq("id", report_id); return json({ error: `no managers in ${region}` }, 500); }
 
     const { data: file, error: dlErr } = await admin.storage.from("worksheet-files").download(rep.pdf_path);
@@ -85,7 +89,7 @@ Deno.serve(async (req) => {
     <div style="color:#6b7280;font-size:13px;margin-bottom:6px">${date} · ${esc(region)} · submitted by ${esc(rep.sent_by_name)} · full report attached</div>
     ${body}
     ${appUrl ? `<p style="margin-top:16px"><a href="${appUrl}" style="background:#002060;color:#fff;text-decoration:none;padding:9px 14px;border-radius:6px;font-weight:600;font-size:13px">Open the Daily Worksheet</a></p>` : ""}
-    <p style="color:#6b7280;font-size:12px;margin-top:18px">Sent automatically from the Franmarine Daily Worksheet to the ${esc(region)} managers.</p>
+    <p style="color:#6b7280;font-size:12px;margin-top:18px">Sent automatically from the Franmarine Daily Worksheet to the ${esc(region)} managers${extra.length ? ", cc " + esc(extra.join(", ")) : ""}.</p>
   </div>
 </div>`;
     const text = `${rep.summary_text ?? ""}\n\nSubmitted by: ${rep.sent_by_name}\n${appUrl}`;

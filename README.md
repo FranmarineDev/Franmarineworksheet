@@ -9,6 +9,9 @@ Field worksheet with Franmarine login, a jobs dashboard, cloud sync, sign-off, a
 | `supabase/schema.sql` | Tables, security policies, storage bucket, reporting views. Run once (safe to re-run). |
 | `manifest.webmanifest`, `icon-*.png` | Add-to-Home-Screen on iPad/iPhone. |
 
+## Release notes
+See `RELEASE-v3.md` for the v3 production runbook (database first, then app).
+
 ## What it does
 - **Jobs dashboard** — running jobs as cards. Managers add/edit/complete jobs; supervisors open worksheets. Each card shows a status signal: **TODAY OPEN**, **SIGNED OFF TODAY**, or **NO WORKSHEET TODAY** (amber, from 9 am), plus who last touched it.
 - **One worksheet per job per day.** *+ Today's worksheet* creates it with Job No., Project and Date fixed from the job card (read-only on the sheet) and the **team, diver names, hats, supervisor, chamber details and SWMS copied from the previous day's sheet** on that job. Times, dive entries, drills and signatures start blank.

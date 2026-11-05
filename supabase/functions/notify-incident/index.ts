@@ -49,7 +49,9 @@ Deno.serve(async (req) => {
     const sev = inc.severity;
     const colour = sev === "High" ? "#c0392b" : sev === "Medium" ? "#e67e22" : "#6b7280";
     const date = new Date(inc.ws_date + "T00:00:00").toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" });
-    const subject = `[${sev.toUpperCase()}] ${inc.type} — ${inc.jobs?.job_no} ${inc.jobs?.project} — ${date}`;
+    const nf = (inc.notifiable ?? {}) as Record<string, string>;
+    const notifiable = nf.status === "Yes";
+    const subject = `${notifiable ? "[NOTIFIABLE] " : ""}[${sev.toUpperCase()}] ${inc.type} — ${inc.jobs?.job_no} ${inc.jobs?.project} — ${date}`;
     const row = (k: string, v: unknown) => v ? `<tr><td style="padding:6px 10px;color:#6b7280;white-space:nowrap;vertical-align:top">${k}</td><td style="padding:6px 10px">${esc(v)}</td></tr>` : "";
     const html = `
 <div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;max-width:640px;color:#1a2332">
@@ -69,6 +71,8 @@ Deno.serve(async (req) => {
       ${row("Immediate actions", inc.actions)}
       ${row("Injury", inc.injury)}
       ${row("Work stopped", inc.work_stopped)}
+      ${nf.status ? row("Notifiable (WHS Act s 35–39)", nf.status) : ""}
+      ${notifiable ? row("Regulator", nf.regulator) + row("Became aware", nf.aware_time) + row("Regulator notified", nf.notified_time ? `${nf.notified_time} by ${nf.method ?? ""} (${nf.notified_by ?? ""})` : "NOT YET NOTIFIED — notify immediately") + row("Reference", nf.reference) + row("Site preserved", nf.site_preserved) : ""}
       ${row("Photos", (inc.photos ?? []).length ? `${inc.photos.length} — see attached PDF` : "")}
     </table>
     ${appUrl ? `<p style="margin-top:18px"><a href="${appUrl}" style="background:#002060;color:#fff;text-decoration:none;padding:10px 16px;border-radius:6px;font-weight:600">Open the Daily Worksheet</a></p>` : ""}
