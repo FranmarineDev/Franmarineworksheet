@@ -767,6 +767,17 @@ body:has(.floatlog.open) .fab{display:none}
           <button data-period="7">7 days</button><button data-period="30" class="active">30 days</button><button data-period="90">Quarter</button>
         </div>
         <button class="btn" data-act="monthlyReport">📄 Monthly report</button>
+        <div class="opt-wrap">
+          <button class="btn ghost" data-act="toggleMgmtManage">⚙ Manage ▾</button>
+          <div class="opt-menu" id="mgmtManageMenu">
+            <button data-act="mgmtTool" data-tool="toggleUsers">🔑 Users</button>
+            <button data-act="mgmtTool" data-tool="toggleCrew">👥 Crew</button>
+            <button data-act="mgmtTool" data-tool="toggleEquip">🛠 Equipment</button>
+            <button data-act="mgmtTool" data-tool="toggleDocs">📚 Controlled documents</button>
+            <button data-act="mgmtTool" data-tool="newJob">➕ New job</button>
+            <label>📥 Import jobs<input type="file" accept=".xlsx,.xls,.csv" hidden id="mgmtImportJobsFile"></label>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1892,7 +1903,17 @@ function toggleManageMenu() { $('#manageMenu').classList.toggle('open'); }
 document.addEventListener('click', e => {
   if (!e.target.closest('.opt-wrap') || e.target.closest('#optMenu > *')) $('#optMenu').classList.remove('open');
   if (!e.target.closest('.opt-wrap') || e.target.closest('#manageMenu > *')) $('#manageMenu')?.classList.remove('open');
+  if (!e.target.closest('.opt-wrap') || e.target.closest('#mgmtManageMenu > *')) $('#mgmtManageMenu')?.classList.remove('open');
 });
+/* Management tools from the Management View: the panels live on the region dashboard, so open the region (the one filtered, else home region) and the tool there */
+const mgmtToolRegion = () => mgmtRegion !== 'ALL' ? mgmtRegion : (me?.region || 'NSW');
+async function mgmtTool(tool) {
+  await enterRegion(mgmtToolRegion());
+  ['#usersPanel', '#crewPanel', '#equipPanel', '#docsPanel'].forEach(id => $(id)?.classList.add('hidden'));
+  ACT[tool]?.(document.createElement('button'));
+  const panel = { toggleUsers: '#usersPanel', toggleCrew: '#crewPanel', toggleEquip: '#equipPanel', toggleDocs: '#docsPanel', newJob: '#jobForm' }[tool];
+  setTimeout(() => $(panel)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+}
 
 function toggleDivingMode() { divingMode = !divingMode; applyDivingMode(); scheduleSave(); }
 function applyDivingMode() {
@@ -4273,6 +4294,8 @@ const ACT = {
   changePassword:    changePassword,
   toggleDrill:       toggleDrill,
   toggleManage:      toggleManageMenu,
+  toggleMgmtManage:  () => $('#mgmtManageMenu').classList.toggle('open'),
+  mgmtTool:          el => mgmtTool(el.dataset.tool),
   toMgmt:            openManagement,
   refreshMgmt:       () => loadManagement(true),
   enterRegion:       el => enterRegion(el.dataset.region),
@@ -4371,6 +4394,7 @@ document.addEventListener('change', e => {
   if (t.matches('[data-crew-active]'))             setCrewActive(t.dataset.crewActive, t.checked);
   if (t.matches('[data-equip-active]'))            setEquipActive(t.dataset.equipActive, t.checked);
   if (t.id === 'importJobsFile')                   importJobsFile(t);
+  if (t.id === 'mgmtImportJobsFile')               enterRegion(mgmtToolRegion()).then(() => importJobsFile(t));
   if (t.id === 'da_drillRequired')                 { applyDrillRequired(); if (t.value === 'Yes') switchTab('ed'); }
   if (t.dataset.proj === 'supervisor' && t.value)  pinSupervisorToRoster(t.value.trim());
   if (t.matches('[data-user-role]'))               setUserField(t.dataset.userRole, 'role', t.value);
