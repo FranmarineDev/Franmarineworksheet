@@ -1696,7 +1696,7 @@ function pageCloseout() {
       <div id="coSent" class="mt"></div>
       <div class="flex mt" style="gap:12px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:12px">
         <button class="btn" data-act="lockWs" id="coLockBtn">🔒 Sign off &amp; lock this day</button>
-        <span class="muted" id="coLockNote">Last step of the day — check the compliance panel above first. Locking makes this sheet the controlled record; a manager can unlock with a reason.</span>
+        <span class="muted" id="coLockNote">Last step of the day — check the compliance panel above first. Supervisor signature, fit-to-dive declarations, bottom times and notifiable determinations must be complete; other gaps can be signed past with a reason. A manager can unlock with a reason.</span>
       </div>
     </div>
   </section>`;
@@ -4110,7 +4110,7 @@ function complianceChecks(st = buildStateObject()) {
     if (cons && !(f('swms_title') || st.swms)) { st_ = 'fail'; det = 'Construction work but no SWMS attached / referenced (s 299)'; }
     else if (unsigned.length) { st_ = cons ? 'fail' : 'warn'; det = 'SWMS not signed: ' + unsigned.join(', '); }
     add('REQ-314', 'SWMS prepared, referenced and signed (s 299)', st_, cons ? 'Major — statutory' : 'Minor', det); }
-  { const incs = (typeof incidents !== 'undefined' ? incidents : []);
+  { const incs = (typeof incidents !== 'undefined' ? incidents : []).filter(i => i.status !== 'withdrawn');
     const open = incs.filter(i => i.notifiable?.status === 'Yes' && (!i.notifiable.notified_time || i.notifiable.method === 'Not yet notified'));
     const unsure = incs.filter(i => i.notifiable?.status && i.notifiable.status.startsWith('Unsure'));
     const none = incs.filter(i => !i.notifiable?.status);
@@ -5008,7 +5008,7 @@ function applyLock() {
   $('#appView').classList.toggle('locked', locked);
   $('#lockBtn').classList.toggle('hidden', locked);
   $('#coLockBtn')?.classList.toggle('hidden', locked);
-  const ln = $('#coLockNote'); if (ln && !locked) ln.textContent = 'Last step of the day — check the compliance panel above first. Locking makes this sheet the controlled record; a manager can unlock with a reason.';
+  const ln = $('#coLockNote'); if (ln && !locked) ln.textContent = 'Last step of the day — check the compliance panel above first. Supervisor signature, fit-to-dive declarations, bottom times and notifiable determinations must be complete; other gaps can be signed past with a reason. A manager can unlock with a reason.';
   if (ln && locked) ln.innerHTML = `🔒 Signed off by ${esc(currentWs.lockedBy || 'supervisor')}${currentWs.lockedAt ? ' · ' + new Date(currentWs.lockedAt).toLocaleString('en-AU', { dateStyle: 'short', timeStyle: 'short' }) : ''}`;
   $$('#optMenu .edit-only').forEach(el => el.classList.toggle('hidden', locked));
   $('#unlockBtn').classList.toggle('hidden', !(locked && isManager()));
@@ -5559,10 +5559,28 @@ async function loadDrillReports() {
 }
 
 /* ---- Sign-off ---- */
+/* Statutory items that cannot be overridden with a reason at sign-off (s 168 / s 180 / s 181 / WHS Act s 38). Everything else can be. */
+function hardBlocks(st) {
+  const out = []; const team = (st.team || []).filter(Boolean);
+  if (!st.sigs?.tb_supSig) out.push('Supervisor signature on the toolbox meeting');
+  if (st.divingMode !== false) {
+    for (const d of loggedDives(st)) {
+      if (!d.ls) continue;
+      if (!d.bt) out.push(`${d.label} — no bottom time recorded`);
+      const ti = d.name ? team.indexOf(d.name) : -1;
+      if (ti >= 0 && !st.sigs?.[`dl_fitToDive_${ti}`]) out.push(`Fit-to-dive declaration not signed — ${d.name}`);
+    }
+  }
+  for (const i of (typeof incidents !== 'undefined' ? incidents : []).filter(i => i.status !== 'withdrawn'))
+    if (!i.notifiable?.status) out.push(`Incident "${i.type}" has no notifiable determination`);
+  return [...new Set(out)];
+}
 async function lockWorksheet() {
   if (!currentWs || currentWs.locked) return;
   if (!online()) { toast('Signing off needs a connection', 2200); return; }
   const stNow = buildStateObject();
+  const hard = hardBlocks(stNow);
+  if (hard.length) { alert('This sheet cannot be signed off yet — these are statutory and have no override:\n\n• ' + hard.join('\n• ') + '\n\nComplete them and sign off again.'); return; }
   const gaps = [...issuesFromState(stNow), ...unsignedList(stNow).map(u => 'Unsigned — ' + u)];
   if (gaps.length) {
     const reason = prompt('Before signing off, this sheet is still missing:\n\n• ' + gaps.join('\n• ') + '\n\nTo sign off anyway, give the reason (recorded on the sheet):');
