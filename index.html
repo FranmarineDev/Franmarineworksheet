@@ -952,6 +952,7 @@ body:has(.floatlog.open) .fab{display:none}
         <label class="f"><span>Job No. *</span><input id="jf_job_no" placeholder="FS0170"></label>
         <label class="f"><span>Project *</span><input id="jf_project" placeholder="Project name"></label>
         <label class="f"><span>Region</span><select id="jf_region"><option>NSW</option><option>WA</option></select></label>
+        <label class="f"><span>Work type</span><select id="jf_work_type"><option value="diving">Diving</option><option value="nondiving">Non-diving (no dive log, dive plan or diving rules)</option></select></label>
         <label class="f"><span>Client</span><input id="jf_client"></label>
         <label class="f"><span>Location</span><input id="jf_location"></label>
         <label class="f"><span>Vessel / Facility</span><input id="jf_vessel"></label>
@@ -1925,10 +1926,21 @@ async function mgmtTool(tool) {
   setTimeout(() => $(panel)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
 }
 
-function toggleDivingMode() { divingMode = !divingMode; applyDivingMode(); scheduleSave(); }
+function toggleDivingMode() { if (currentJob?.work_type === 'nondiving') { toast('This job is set up as non-diving — change it on the job card to add diving', 3000); return; } divingMode = !divingMode; applyDivingMode(); scheduleSave(); }
+const DIVING_FIELD_RE = /^(cl_(class|vessel|divePlan|divePlanRev|tables|chamberCat|travel)|tb_(planBriefTime|planBriefBy|planAgreed|omittedDeco|extraction|adjust))$/;
+const DIVING_CHECKLIST = /flag alpha|permit to dive/i;
 function applyDivingMode() {
   const hide = !divingMode;
+  const jobND = currentJob?.work_type === 'nondiving';
   $$('.diving-only').forEach(el => el.style.display = hide ? 'none' : '');
+  $$('#root [id]').forEach(el => { if (DIVING_FIELD_RE.test(el.id)) { const w = el.closest('label.f, .f') || el; w.style.display = hide ? 'none' : ''; } });
+  $$('#page-tb .sec').forEach(sec => { if (/Dive Plan Briefing/.test(sec.querySelector('h2')?.textContent || '')) sec.style.display = hide ? 'none' : ''; });
+  $$('#page-tb .chk').forEach(row => { if (DIVING_CHECKLIST.test(row.querySelector('span')?.textContent || '')) row.style.display = hide ? 'none' : ''; });
+  const cb = $('#clsBanner'); if (cb) cb.style.display = hide ? 'none' : '';
+  const rn = $('#regNote'); if (rn) rn.textContent = hide ? `Governing documents: ${(LEG_CITATION[currentRegion()] || '').replace(/( Pt 4\.8.*| · AS\/NZS.*)$/, '')} — non-diving work` : 'Governing documents: ' + LEG_CITATION[currentRegion()] + ' · DCIEM tables & procedures';
+  const sw = $('[data-tab=swms].nav'); if (sw) sw.textContent = hide ? '📄 SWMS' : '📄 SWMS & Dive Plan';
+  const sp = $('[data-tab=swms].pill'); if (sp) sp.textContent = hide ? 'SWMS' : 'SWMS / Plan';
+  const mb = $('#modeBtn'), ib = $('#inlineModeBtn'); if (mb) mb.style.display = jobND ? 'none' : ''; if (ib) ib.style.display = jobND ? 'none' : '';
   $('#navDive').style.display  = hide ? 'none' : '';
   $('#pillDive').style.display = hide ? 'none' : '';
   if (hide && activeTab === 'dive') switchTab('setup');
@@ -1937,9 +1949,9 @@ function applyDivingMode() {
   if (inlineBtn) inlineBtn.textContent = divingMode
     ? '🤿 Switch to Non-Diving Worksheet'
     : '🤿 Switch to Diving Worksheet';
-  if (inlineStatus) inlineStatus.textContent = divingMode
-    ? 'Diving Log is currently visible'
-    : 'Diving Log is hidden (non-diving mode)';
+  if (inlineStatus) inlineStatus.textContent = jobND ? 'Non-diving job — the dive log, dive plan and diving compliance rules do not apply' : divingMode
+    ? 'Diving day — dive log, dive plan and diving rules apply'
+    : 'Non-diving day — dive log, dive plan and diving rules are switched off for this sheet';
 }
 
 
@@ -2945,7 +2957,7 @@ async function applyState(s) {
   try { await _applyState(s); } finally { applying = false; }
 }
 async function _applyState(s) {
-  divingMode   = s.divingMode !== false;
+  divingMode   = currentJob?.work_type === 'nondiving' ? false : s.divingMode !== false;   // the job's work type overrides what the sheet stored
   applyDivingMode();
   teamMembers  = Array.isArray(s.team) ? s.team : [];
   renderTeamUI();
@@ -4078,7 +4090,7 @@ function complianceChecks(st = buildStateObject()) {
   const hr = f('cl_class') === CLASS_OPTIONS[1];
   const stat = s => s === 'Major' ? (hr ? 'Major — statutory' : 'Major — internal') : s;
   const diving = st.divingMode !== false;
-  const dives = loggedDives(st);
+  const dives = diving ? loggedDives(st) : [];   // a non-diving sheet has no dives in law, whatever rows are left in it
   const date = f('da_date') || todayISO();
   const named = [...new Set(dives.map(d => d.i))];
   const maxDepth = dives.reduce((m, d) => Math.max(m, d.depth), 0);
@@ -4086,8 +4098,10 @@ function complianceChecks(st = buildStateObject()) {
   const team = (st.team || []).filter(Boolean);
   const signed = id => !!st.sigs?.[id];
 
-  add('D-01', 'Job classified (General / High Risk; construction work)', f('cl_class') && f('cl_construction') ? 'pass' : 'fail', 'Major',
+  if (diving) add('D-01', 'Job classified (General / High Risk; construction work)', f('cl_class') && f('cl_construction') ? 'pass' : 'fail', 'Major',
     f('cl_class') ? f('cl_class') + (f('cl_construction') === 'Yes' ? ' · construction work → SWMS mandatory' : '') : 'Set the classification in Project Overview');
+  else add('D-01', 'Job classified (non-diving; construction work)', f('cl_construction') ? 'pass' : 'fail', 'Major',
+    f('cl_construction') ? 'Non-diving work' + (f('cl_construction') === 'Yes' ? ' · construction work → SWMS mandatory' : '') : 'Answer "Construction work?" in Project Overview');
   add('D-02', 'Legislation citation current', 'pass', 'Minor', LEG_CITATION[st.region] || LEG_CITATION.NSW);
   { const m = miss([['Dive plan PDF attached', !!st.plan], ['Dive plan no.', f('cl_divePlan')], ['Dive plan rev', f('cl_divePlanRev')], ['Table set', f('cl_tables')], ['Chamber availability', f('cl_chamberCat')],
       ['Omitted-deco procedure briefed', f('tb_omittedDeco') === 'Yes'], ['Incapacitated-diver extraction briefed', f('tb_extraction') === 'Yes']]);
@@ -4120,7 +4134,8 @@ function complianceChecks(st = buildStateObject()) {
     if (f('cl_vessel') === 'Yes') { if (!f('dv_pobBefore')) bad.push('POB before diving not recorded'); if (!f('dv_pobDepart')) bad.push('POB before departure not recorded'); if (f('dv_pobVerified') !== 'Yes') bad.push('POB not verified by supervisor'); }
     add('D-07', 'Log verified by diver & supervisor; vessel POB (s 181)', !dives.length ? 'na' : bad.length ? 'fail' : 'pass', 'Major — statutory', bad.length ? 'Unverified: ' + bad.join('; ') : ''); }
   { const sup = f('da_supervisor');
-    add('D-08', 'Appointed supervisor named (s 177)', sup ? 'pass' : 'fail', 'Major — statutory', sup ? sup + ' — letter of appointment held on the crew register' : 'No supervisor named'); }
+    if (diving) add('D-08', 'Appointed supervisor named (s 177)', sup ? 'pass' : 'fail', 'Major — statutory', sup ? sup + ' — letter of appointment held on the crew register' : 'No supervisor named');
+    else add('D-08', 'Site supervisor named', sup ? 'pass' : 'fail', 'Minor', sup || 'No supervisor named'); }
   { let st_ = 'na', det = 'No dives logged';
     if (dives.length) { const sup = f('da_supervisor').toLowerCase(); const people = new Set(); let supDives = false;
       for (const i of named) for (const k of ['name', 'attendant', 'standby']) { const v = f(`diver_${i}_${k}`); if (v) people.add(v.toLowerCase()); if (k === 'name' && v && v.toLowerCase() === sup) supDives = true; }
@@ -4194,7 +4209,8 @@ function renderCompliance() {
   const el = $('#cmpPanel'); if (!el || !currentWs) return;
   const R = complianceChecks();
   const n = s => R.filter(r => r.status === s).length;
-  el.innerHTML = `<div class="cmp-sum"><span class="badge pass">${n('pass')} pass</span><span class="badge fail">${n('fail')} fail</span><span class="badge warn">${n('warn')} review</span><span class="badge na">${n('na')} n/a</span></div>
+  const ndNote = divingMode ? '' : `<div class="muted mb">Non-diving ${currentJob?.work_type === 'nondiving' ? 'job' : 'day'} — the WHS Reg 2025 Pt 4.8 / AS/NZS 2299.1 diving rules are shown as N/A; SWMS, classification, incident and document rules still apply.</div>`;
+  el.innerHTML = ndNote + `<div class="cmp-sum"><span class="badge pass">${n('pass')} pass</span><span class="badge fail">${n('fail')} fail</span><span class="badge warn">${n('warn')} review</span><span class="badge na">${n('na')} n/a</span></div>
   <div class="tbl-scroll"><table class="cmp-table"><thead><tr><th>Rule</th><th>Check</th><th>Result</th><th>Severity</th><th>Detail</th></tr></thead><tbody>${
     R.map(r => `<tr><td class="rule">${esc(r.rule)}</td><td>${esc(r.title)}</td><td><span class="badge ${r.status}">${CMP_LABEL[r.status]}</span></td><td>${esc(r.status === 'fail' ? r.sev : '')}</td><td class="det">${esc(r.detail)}</td></tr>`).join('')
   }</tbody></table></div>`;
@@ -4740,7 +4756,7 @@ function renderJobs() {
     <details class="job-group${done ? ' done' : ''}" data-key="${key}"${openBundles.has(key) || (!done && todayWs) ? ' open' : ''}>
       <summary>
         <div class="jg-main">
-          <div class="jg-title"><span class="jg-no">${esc(j.job_no)}</span> ${esc(j.project)}</div>
+          <div class="jg-title"><span class="jg-no">${esc(j.job_no)}</span> ${esc(j.project)}${j.work_type === 'nondiving' ? ' <span class="jg-count" title="Non-diving job — no dive log or diving rules">non-diving</span>' : ''}</div>
           <div class="jg-meta">${meta || '<i>No client / location set</i>'}${j.supervisor ? `  ·  Sup: ${esc(j.supervisor)}` : ''}${range ? `  ·  ${esc(range)}` : ''}</div>
         </div>
         <div class="jg-right">
@@ -4776,6 +4792,7 @@ function showJobForm(job) {
   for (const k of ['job_no','project','region','client','location','vessel','start_date','supervisor','contact','contact_ph'])
     $('#jf_' + k).value = job?.[k] ?? (k === 'region' ? me.region : '');
   $('#jf_quoted_hours_per_day').value = job?.quoted_hours_per_day ?? ''; $('#jf_quoted_days').value = job?.quoted_days ?? '';
+  $('#jf_work_type').value = job?.work_type === 'nondiving' ? 'nondiving' : 'diving';
   $('#jobForm').dataset.prevSupervisor = job?.supervisor || '';
   jobSwms = job?.swms ? normaliseEntry(job.swms, 'swms') : null; jobSwmsDirty = false; paintJobSwms();
   jobPlan = job?.dive_plan ? normaliseEntry(job.dive_plan, 'plan') : null; jobPlanDirty = false; paintJobPlan();
@@ -4794,6 +4811,7 @@ async function saveJob() {
   const row = {};
   for (const k of ['job_no','project','region','client','location','vessel','start_date','supervisor','contact','contact_ph'])
     row[k] = $('#jf_' + k).value.trim() || null;
+  row.work_type = $('#jf_work_type').value === 'nondiving' ? 'nondiving' : 'diving';
   row.quoted_hours_per_day = $('#jf_quoted_hours_per_day').value === '' ? null : +$('#jf_quoted_hours_per_day').value;
   row.quoted_days = $('#jf_quoted_days').value === '' ? null : Math.round(+$('#jf_quoted_days').value);
   row.crew = pickedJobCrew();
@@ -4988,7 +5006,7 @@ async function renderStorageGauge() {
 
 /* ---- Opening worksheets ---- */
 function initialWorksheetData(job, wsDate) {
-  return { v:1, region: job.region || 'NSW', divingMode:true, team:[], fields:{
+  return { v:1, region: job.region || 'NSW', divingMode: job.work_type !== 'nondiving', team:[], fields:{
     da_project: job.project || '', da_date: wsDate, da_jobNo: job.job_no || '',
     da_location: job.location || '', da_vessel: job.vessel || '', da_client: job.client || '',
     da_supervisor: job.supervisor || '', da_contact: job.contact || '', da_contactPh: job.contact_ph || '' } };
@@ -5026,7 +5044,7 @@ async function openTodayWorksheet(jobId) {
       const p = await fetchWorksheet(prev.id);
       const pd = p.data || {};
       init.team = (pd.team || []).filter(Boolean);
-      init.divingMode = pd.divingMode !== false;
+      init.divingMode = job.work_type === 'nondiving' ? false : pd.divingMode !== false;
       for (const [k, v] of Object.entries(pd.fields || {})) if (CARRY_RE.test(k) && v) init.fields[k] = v;
       for (let i = 0; i < NUM_DIVERS; i++) { const n = pd.fields?.[`diver_${i}_name`]; if (n) init.fields[`diver_${i}_name`] = n; }
       // SWMS document carries over too (same job, same SWMS) — pages are storage paths, so no re-upload
