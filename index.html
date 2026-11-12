@@ -4799,7 +4799,7 @@ function showJobForm(job) {
   paintJobCrewPick(job?.crew || []);
   fillSupervisorList();
   $('#jobErr').textContent = '';
-  $('#deleteJobBtn').classList.toggle('hidden', !job || !isManager() || (job.worksheets || []).some(w => !w.voided_at));   // deletable once every day sheet is voided (or none exist)
+  $('#deleteJobBtn').classList.toggle('hidden', !job || !isManager());   // managers can delete any job; the deletion is logged in deleted_jobs
   $('#jobForm').scrollIntoView({ behavior:'smooth', block:'start' });
   if (!job) $('#jf_job_no').focus();
 }
@@ -4938,11 +4938,18 @@ async function fillSupervisorList() {
 
 async function deleteJob() {
   const id = $('#jf_id').value; if (!id) return;
-  const j = jobsById[id]; const voided = (j?.worksheets || []).filter(w => w.voided_at).length;
-  if (!confirm(`Delete job ${j?.job_no || ''}?\n\nOnly a job with no live day sheets can be deleted${voided ? ` — its ${voided} voided sheet(s), their files and any incidents on it go with it` : ''}. This cannot be undone.`)) return;
+  const j = jobsById[id]; const sheets = (j?.worksheets || []); const live = sheets.filter(w => !w.voided_at).length, signed = sheets.filter(w => w.locked && !w.voided_at).length;
+  const incs = (j?.incidents || []).filter(i => i.status !== 'withdrawn').length;
+  const typed = prompt(`Delete job ${j?.job_no || ''} — ${j?.project || ''}?\n\nThis permanently removes the job${sheets.length ? `, its ${sheets.length} day sheet(s)${signed ? ` (${signed} signed off)` : ''}` : ''}${incs ? `, ${incs} incident report(s)` : ''} and all their files. It cannot be undone. A record of the deletion is kept in the register.\n\nType the job number to confirm:`);
+  if (typed == null) return;
+  if (typed.trim().toUpperCase() !== String(j?.job_no || '').trim().toUpperCase()) { toast('Job number did not match — nothing deleted', 2500); return; }
+  const reason = prompt('Reason for deleting (required — e.g. duplicate, created in error, test):');
+  if (reason == null) return;
+  if (!reason.trim()) { toast('A reason is required', 2000); return; }
+  await sb.from('deleted_jobs').insert({ job_id: id, job_no: j?.job_no, project: j?.project, region: j?.region, client: j?.client, sheets: sheets.length, signed_sheets: signed, incidents: incs, deleted_by_name: me.name, reason: reason.trim() });
   const { data, error } = await sb.from('jobs').delete().eq('id', id).select('id');
   if (error) { $('#jobErr').textContent = error.message; return; }
-  if (!data?.length) { $('#jobErr').textContent = 'Not deleted — the job still has a live day sheet, or you are not a manager for this region.'; return; }
+  if (!data?.length) { $('#jobErr').textContent = 'Not deleted — you are not a manager for this region.'; return; }
   try {   // tidy up the job's files (SWMS, dive plan, voided sheets' uploads)
     const paths = []; const walk = async pre => { const { data: items } = await sb.storage.from(BUCKET).list(pre, { limit: 1000 }); for (const it of (items || [])) { if (it.id) paths.push(`${pre}/${it.name}`); else await walk(`${pre}/${it.name}`); } };
     await walk(`job/${id}`);
