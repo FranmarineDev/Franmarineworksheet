@@ -2213,8 +2213,10 @@ function initSig(canvas) {
     ctx.scale(dpr, dpr);
     ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.strokeStyle = '#1a2332';
     if (prev) {
+      canvas.dataset.loading = '1';                     // redraw after a resize is async too
       const img = new Image();
-      img.onload = () => ctx.drawImage(img, 0, 0, r.width, r.height);
+      img.onload = () => { ctx.drawImage(img, 0, 0, r.width, r.height); delete canvas.dataset.loading; };
+      img.onerror = () => { delete canvas.dataset.loading; };
       img.src = prev;
     } else if (canvas.dataset.pending) {
       applySigData(canvas, canvas.dataset.pending);
@@ -2247,6 +2249,7 @@ function initSig(canvas) {
     if (!drawing) return;
     drawing = false;
     if (!sigMeta[canvas.dataset.sig]) sigMeta[canvas.dataset.sig] = { by: me?.name || '', uid: me?.id || '', at: new Date().toISOString() };
+    delete canvas.dataset.pending; delete canvas.dataset.loading; canvas.dataset.src = sigDataURL(canvas);
     paintSigStamp(canvas);
     scheduleSave();
     if (e && e.pointerId != null) {
@@ -2267,8 +2270,10 @@ function applySigData(canvas, dataUrl) {
     ctx.scale(dpr, dpr);
     ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.strokeStyle = '#1a2332';
   }
+  canvas.dataset.src = dataUrl; canvas.dataset.loading = '1';
   const img = new Image();
-  img.onload = () => ctx.drawImage(img, 0, 0, r.width, r.height);
+  img.onload = () => { ctx.drawImage(img, 0, 0, r.width, r.height); delete canvas.dataset.loading; };
+  img.onerror = () => { delete canvas.dataset.loading; };
   img.src = dataUrl;
   return true;
 }
@@ -2276,6 +2281,7 @@ function applySigData(canvas, dataUrl) {
 function clearSig(id) {
   const c = $(`canvas[data-sig="${id}"]`); if (!c) return;
   c.getContext('2d').clearRect(0, 0, c.width, c.height);
+  delete c.dataset.src; delete c.dataset.pending; delete c.dataset.loading;
   delete sigMeta[id]; paintSigStamp(c);
   scheduleSave();
 }
@@ -2920,10 +2926,17 @@ function buildStateObject() {
     state.fields[el.id] = el.type === 'checkbox' ? (el.checked ? 'on' : '') : el.value;
   });
   state.equipment = equipmentRows.filter(r => r.item || r.notes);
-  // Signatures, only if non-empty (and drop stamps for signatures that were cleared)
+  // Signatures. A canvas is only trusted as the source of truth when it is on screen and fully drawn;
+  // a hidden tab's canvas (no size), one still waiting to be drawn (pending) or one mid-load keeps the
+  // last-known image in dataset.src — otherwise a save from another tab silently erased those signatures.
   $$('canvas[data-sig]').forEach(c => {
-    if (!isSigEmpty(c)) state.sigs[c.dataset.sig] = sigDataURL(c);
-    else delete state.sigMeta[c.dataset.sig];
+    const id = c.dataset.sig;
+    const live = c.width > 0 && c.getBoundingClientRect().width > 0 && !c.dataset.pending && !c.dataset.loading;
+    if (live) {
+      if (!isSigEmpty(c)) { const d = sigDataURL(c); state.sigs[id] = d; c.dataset.src = d; }
+      else { delete c.dataset.src; delete state.sigMeta[id]; }
+    } else if (c.dataset.pending || c.dataset.src) state.sigs[id] = c.dataset.pending || c.dataset.src;
+    else delete state.sigMeta[id];
   });
   // Manual activity rows (auto-rows are derived)
   state.activity = Array.from($$('#activityBody tr:not(.auto-row)')).map(tr => {
