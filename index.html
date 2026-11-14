@@ -3610,7 +3610,7 @@ function exportDiveCSV() {
     const subs = $('#diveSubs_' + i)?.querySelectorAll('.dive-sub') || [];
     const hasAny = Array.from(subs).some(s =>
       Array.from(s.querySelectorAll('input, select')).some(el => el.value));
-    if (!name && !hasAny) continue;
+    if (!hasAny) continue;   // skip slots that only carry a name
     subs.forEach((sub, j) => {
       const p = f => `#d${i}s${j}_${f}`;
       rows.push([
@@ -4085,8 +4085,8 @@ function loggedDives(st) {
     const name = f(`diver_${i}_name`);
     for (let j = 0; j < (st.sub?.[i] || 1); j++) {
       const p = k => f(`d${i}s${j}_${k}`);
-      const any = ['leftSurf', 'arrSurf', 'depth', 'totalDive', 'totalBottom', 'bailout', 'incident'].some(k => p(k));
-      if (!name && !any) continue;
+      const any = ['leftSurf', 'leftBottom', 'arrSurf', 'depth', 'totalDive', 'totalBottom', 'bailout', 'incident'].some(k => p(k));
+      if (!any) continue;   // a name alone is not a dive — names carry over from yesterday, and divers needn't be entered in slot order
       out.push({ i, j, name, label: `Diver ${i + 1}${name ? ' ' + name : ''} dive ${j + 1}`,
         ls: p('leftSurf'), as: p('arrSurf'), depth: +p('depth') || 0, ndl: +p('ndl') || 0, cap: +p('ndlCap') || 0,
         bt: +p('totalBottom') || 0, dt: +p('totalDive') || 0, si: p('si'), rf: p('rf'), rg: p('rg'),
@@ -5845,6 +5845,7 @@ function summarise(d) {
       if (!g('leftSurf') && !g('totalDive')) continue;
       dv++; b += +g('totalBottom') || 0; t += +g('totalDive') || 0; maxD = Math.max(maxD, +g('depth') || 0);
     }
+    if (!dv) continue;   // named but didn't dive today
     divers.push({ name, dives: dv, bottom_min: b, dive_min: t, max_depth: maxD });
     dives += dv; bottom += b; diveMin += t;
   }
@@ -5903,6 +5904,7 @@ function showSummary(jobId) {
   const hrs = m => (m / 60).toFixed(1) + ' h';
   const byDiver = {};
   S.forEach(s => (s.divers || []).forEach(dv => {
+    if (!(+dv.dives > 0)) return;   // older summaries listed named divers who didn't dive
     const r = byDiver[dv.name] ||= { dives: 0, bottom: 0, days: 0, maxD: 0 };
     r.dives += dv.dives; r.bottom += dv.bottom_min; r.days++; r.maxD = Math.max(r.maxD, dv.max_depth || 0);
   }));
