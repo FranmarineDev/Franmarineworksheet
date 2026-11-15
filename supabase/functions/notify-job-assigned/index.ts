@@ -23,12 +23,19 @@ Deno.serve(async (req) => {
 
     const admin = createClient(url, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
     const { data: me } = await admin.from("profiles").select("role, region, full_name, email").eq("id", user.id).single();
-    if (me?.role !== "manager") return json({ error: "only managers can assign jobs" }, 403);
+    if (!me || me.role === "guest") return json({ error: "not allowed" }, 403);
 
     const { job_id } = await req.json().catch(() => ({}));
     if (!job_id) return json({ error: "job_id required" }, 400);
     const { data: job } = await admin.from("jobs").select("*").eq("id", job_id).single();
     if (!job) return json({ error: "job not found" }, 404);
+    // Managers, or whoever created the job (anyone signed in can start a job and nominate its supervisor)
+    if (me.role !== "manager" && job.created_by !== user.id) return json({ error: "only managers or the job's creator can send this" }, 403);
+    // Prefer the account picked on the job card
+    if (job.supervisor_id) {
+      const { data: sup } = await admin.from("profiles").select("id, email, full_name").eq("id", job.supervisor_id).maybeSingle();
+      if (sup?.full_name) job.supervisor = sup.full_name;
+    }
     if (!job.supervisor) return json({ skipped: "no supervisor on the job" });
 
     // Find the supervisor's account by name within the job's region (exact first, then loose match)

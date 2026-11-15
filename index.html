@@ -887,7 +887,7 @@ body:has(.floatlog.open) .fab{display:none}
             <label>📥 Import jobs<input type="file" accept=".xlsx,.xls,.csv" hidden id="importJobsFile"></label>
           </div>
         </div>
-        <button class="btn mgr-only" data-act="newJob">+ New Job</button>
+        <button class="btn" data-act="newJob">+ New Job</button>
       </div>
     </div>
     <div class="sec hidden" id="usersPanel">
@@ -1716,6 +1716,7 @@ function pageCloseout() {
       <h2>Record control <span class="muted" style="text-transform:none;font-weight:400">${FORM_ID.number} ${FORM_ID.rev} · ${FORM_ID.marking}</span></h2>
       <div class="muted mb">Sign-off locks the sheet. A manager can unlock with a reason; every unlock, re-sign-off, gap override and PDF export is logged here and printed on the PDF. Day sheets are never deleted — a manager can void one, which hides and locks it but keeps the record.</div>
       <div id="changeLog" class="chg"></div>
+      <div id="wsEdits" class="chg"></div>
       <div id="exportLog" class="chg"></div>
     </div>
 
@@ -2792,7 +2793,7 @@ function deleteRefs(e, owner) {
 /* Upload any data: refs to Storage, and render any PDFs that were saved un-rendered */
 let flushing = false;
 async function flushFiles() {
-  if (!sb || !online() || !currentWs || currentWs.locked || flushing) return;
+  if (!sb || !online() || !currentWs || wsReadOnly() || flushing) return;
   flushing = true; let changed = false;
   const wsId = currentWs.id;
   try {
@@ -2906,7 +2907,7 @@ function dismissBubble() { $('#bubble').classList.add('hidden'); localStorage.se
 /* === 18. Persistence ============================================= */
 
 function scheduleSave() {
-  if (applying || currentWs?.locked) return;
+  if (applying || wsReadOnly()) return;
   editSeq++;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(saveState, 800);
@@ -2992,7 +2993,7 @@ function buildStateObject() {
 }
 
 function saveState() {
-  if (!currentWs) return;
+  if (!currentWs || wsReadOnly()) return;
   try {
     const dirty = editSeq !== syncedSeq;
     writeCache(buildStateObject(), currentWs.version, dirty, editSeq);
@@ -3099,7 +3100,7 @@ function saveToFile() {
 
 async function loadFromFile(input) {
   const f = input.files?.[0]; if (!f) return;
-  if (currentWs?.locked) { input.value = ''; return; }
+  if (wsReadOnly()) { input.value = ''; return; }
   if (!confirm('Loading a file will REPLACE all current data. Continue?')) {
     input.value = ''; return;
   }
@@ -3114,7 +3115,7 @@ async function loadFromFile(input) {
 }
 
 function clearAll() {
-  if (currentWs?.locked) return;
+  if (wsReadOnly()) return;
   if (!confirm('Clear everything on THIS worksheet? This cannot be undone.')) return;
   teamMembers = []; autoRowEdits = {}; swmsFile = null; permitFiles = []; divingMode = true;
   renderAll();
@@ -4347,6 +4348,7 @@ const ACT = {
   clearAll:          clearAll,
   /* auth + dashboard */
   forgotPass:        forgotPassword,
+  reassignSupervisor: reassignSupervisor,
   showSignup:        () => { showLoginPane('signup'); setTimeout(() => $('#suName').focus(), 50); },
   showLogin:         () => showLoginPane('login'),
   refreshPending:    refreshPending,
@@ -4739,7 +4741,7 @@ async function loadDashboard(manual = false) {
   let jobs = null;
   if (online()) {
     const { data, error } = await sb.from('jobs')
-      .select('*, worksheets(id, ws_date, updated_at, updated_by_name, supervisor, locked, summary, voided_at), incidents(id, ws_date, type, severity, status, description, reported_by_name, reported_by, occurred_at, email_status, created_at, withdrawn_by_name, withdrawn_at, withdraw_reason)')
+      .select('*, worksheets(id, ws_date, updated_at, updated_by_name, supervisor, supervisor_id, locked, summary, voided_at), incidents(id, ws_date, type, severity, status, description, reported_by_name, reported_by, occurred_at, email_status, created_at, withdrawn_by_name, withdrawn_at, withdraw_reason)')
       .order('created_at', { ascending:false });
     if (error) { banner.textContent = 'Could not load jobs: ' + error.message; banner.classList.remove('hidden'); }
     else { jobs = data; banner.classList.add('hidden'); try { localStorage.setItem(DASH_CACHE, JSON.stringify(jobs)); } catch (e) {} }
@@ -4943,6 +4945,11 @@ async function saveJob() {
   row.quoted_days = $('#jf_quoted_days').value === '' ? null : Math.round(+$('#jf_quoted_days').value);
   row.crew = pickedJobCrew();
   if (!row.job_no || !row.project) { $('#jobErr').textContent = 'Job No. and Project are required.'; return; }
+  if (!usersList.length) await fillSupervisorList();
+  const supUser = row.supervisor ? usersList.find(u => u.role !== 'guest' && u.region === row.region && (u.full_name || '').trim().toLowerCase() === row.supervisor.toLowerCase()) : null;
+  if (row.supervisor && !supUser) { $('#jobErr').textContent = `"${row.supervisor}" isn't a user account in ${row.region} — pick the supervisor from the list.`; return; }
+  row.supervisor = supUser?.full_name || null; row.supervisor_id = supUser?.id || null;
+  if (!isManager()) { delete row.quoted_hours_per_day; delete row.quoted_days; }   // managers-only fields
   if (!online()) { $('#jobErr').textContent = 'You are offline — jobs can only be added when connected.'; return; }
   const id = $('#jf_id').value;
   if (!id) {
@@ -4955,14 +4962,13 @@ async function saveJob() {
   let res;
   try {
     if (id) res = await sb.from('jobs').update({ ...row, updated_at: new Date().toISOString() }).eq('id', id);
-    else    res = await sb.from('jobs').insert({ ...row, created_by: me.id });
+    else    res = await sb.from('jobs').insert({ ...row, created_by: me.id }).select('id').single();
   } catch (e) { res = { error: e }; }
   if (res.error) { $('#jobErr').textContent = res.error.message; done(); return; }
   const supChanged = row.supervisor && row.supervisor !== ($('#jobForm').dataset.prevSupervisor || '');
   if (jobSwmsDirty) {
     try {
-      let jobId = id;
-      if (!jobId) { const { data } = await sb.from('jobs').select('id').eq('job_no', row.job_no).eq('project', row.project).order('created_at', { ascending: false }).limit(1).maybeSingle(); jobId = data?.id; }
+      const jobId = id || res.data?.id;
       if (jobId) {
         const old = jobsById[jobId]?.swms;
         if (old) deleteRefs(normaliseEntry(old, 'swms'), `job/${jobId}/`);
@@ -4974,8 +4980,7 @@ async function saveJob() {
   }
   if (jobPlanDirty) {
     try {
-      let jobId = id;
-      if (!jobId) { const { data } = await sb.from('jobs').select('id').eq('job_no', row.job_no).eq('project', row.project).order('created_at', { ascending: false }).limit(1).maybeSingle(); jobId = data?.id; }
+      const jobId = id || res.data?.id;
       if (jobId) {
         const old = jobsById[jobId]?.dive_plan;
         if (old) deleteRefs(normaliseEntry(old, 'plan'), `job/${jobId}/`);
@@ -4990,8 +4995,7 @@ async function saveJob() {
   await loadDashboard();
   toast(id ? '✓ Job updated' : '✓ Job added');
   if (supChanged) {
-    let jobId = id;
-    if (!jobId) { const j = Object.values(jobsById).find(x => x.job_no === row.job_no && x.project === row.project); jobId = j?.id; }
+    const jobId = id || res.data?.id;
     if (jobId) notifyJobAssigned(jobId, row.supervisor);
   }
 }
@@ -5194,8 +5198,12 @@ async function openTodayWorksheet(jobId) {
     const m = planRefFromName(job.dive_plan.name);
     if (m && !init.fields.cl_divePlan) init.fields.cl_divePlan = m.no;
     if (m && m.rev && !init.fields.cl_divePlanRev) init.fields.cl_divePlanRev = m.rev; }
+  const prevId = (job.worksheets || []).slice().sort((a, b) => b.ws_date.localeCompare(a.ws_date))[0]?.supervisor_id;
+  const pick = await pickSupervisor(job.region, prevId || job.supervisor_id || me.id, `Who is the nominated supervisor for ${job.job_no} on ${fmtDate(today)}? Only they (and managers) can fill in the sheet.`);
+  if (!pick) return;
+  init.fields.da_supervisor = pick.name;
   const { data, error } = await sb.from('worksheets')
-    .insert({ job_id: jobId, ws_date: today, supervisor: init.fields.da_supervisor || null,
+    .insert({ job_id: jobId, ws_date: today, supervisor: pick.name, supervisor_id: pick.id,
               data: init, created_by: me.id, updated_by: me.id, updated_by_name: me.name })
     .select('id, job_id, ws_date, version').single();
   if (error) {
@@ -5214,7 +5222,7 @@ function openWorksheetById(wsId, jobId) {
 }
 
 async function fetchWorksheet(id) {
-  const { data, error } = await sb.from('worksheets').select('id, job_id, ws_date, version, data, updated_by_name, updated_at, locked, locked_by_name, locked_at').eq('id', id).single();
+  const { data, error } = await sb.from('worksheets').select('id, job_id, ws_date, version, data, updated_by_name, updated_at, locked, locked_by_name, locked_at, supervisor, supervisor_id').eq('id', id).single();
   if (error) throw error;
   return data;
 }
@@ -5225,11 +5233,62 @@ function lockJobFields(job, wsDate) {
   for (const [k, v] of Object.entries(fixed)) $$(`[data-proj="${k}"]`).forEach(el => { el.value = v; el.readOnly = true; el.title = 'Set on the job card'; });
 }
 
+/* Pick a user account in a region (supervisor nomination). Resolves { id, name } or null if cancelled. */
+async function pickSupervisor(region, defaultId, question) {
+  if (online() && !usersList.length) { const { data } = await sb.from('profiles').select('id, email, full_name, role, region').order('full_name'); if (data) usersList = data; }
+  const people = usersList.filter(u => u.role !== 'guest' && u.region === region && u.full_name);
+  if (!people.length) { toast(`No user accounts in ${region} to nominate`, 3000); return null; }
+  return new Promise(resolve => {
+    const d = document.createElement('dialog');
+    d.style.cssText = 'border:none;border-radius:10px;padding:18px;max-width:420px;width:92vw;box-shadow:0 10px 40px rgba(0,0,0,.3)';
+    d.innerHTML = `<p style="margin-bottom:10px">${esc(question)}</p>
+      <select id="pickSupSel" style="width:100%;padding:8px;font-size:15px">${people.map(u => `<option value="${u.id}" ${u.id === defaultId ? 'selected' : ''}>${esc(u.full_name)}${u.role === 'manager' ? ' (manager)' : ''}</option>`).join('')}</select>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px"><button class="btn ghost" value="cancel" type="button">Cancel</button><button class="btn" value="ok" type="button">OK</button></div>`;
+    document.body.appendChild(d);
+    const done = ok => { const u = ok ? people.find(x => x.id === d.querySelector('#pickSupSel').value) : null; d.close(); d.remove(); resolve(u ? { id: u.id, name: u.full_name } : null); };
+    d.querySelector('[value=ok]').onclick = () => done(true);
+    d.querySelector('[value=cancel]').onclick = () => done(false);
+    d.addEventListener('cancel', e => { e.preventDefault(); done(false); });
+    d.showModal();
+  });
+}
+async function reassignSupervisor() {
+  if (!currentWs || !isManager()) return;
+  if (!online()) { toast('Changing the supervisor needs a connection', 2200); return; }
+  const pick = await pickSupervisor(currentJob?.region || me.region, currentWs.supervisorId, 'Change the nominated supervisor for this day sheet to:');
+  if (!pick || pick.id === currentWs.supervisorId) return;
+  const reason = prompt(`Hand this day sheet from ${currentWs.supervisorName || 'nobody'} to ${pick.name}. Reason (recorded on the sheet):`);
+  if (reason == null) return;
+  if (!reason.trim()) { toast('A reason is required', 2000); return; }
+  changeLog.push({ at: new Date().toISOString(), by: me.name, action: 'Supervisor changed', reason: `${currentWs.supervisorName || '—'} → ${pick.name}: ${reason.trim()}` });
+  currentWs.supervisorId = pick.id; currentWs.supervisorName = pick.name;
+  const ds = $('#da_supervisor'); if (ds) ds.value = pick.name;
+  renderChangeLog(); applyLock();
+  editSeq++; saveState(); pushWorksheet();
+  toast(`✓ ${pick.name} is now the nominated supervisor`, 2200);
+}
+/* Edits by anyone other than the nominated supervisor (written by the database, read-only here) */
+async function loadWorksheetEdits() {
+  const el = $('#wsEdits'); if (!el) return; el.innerHTML = '';
+  if (!currentWs || !online()) return;
+  const wsId = currentWs.id;
+  const { data } = await sb.from('worksheet_edits').select('at, by_name, field, old_value, new_value').eq('worksheet_id', wsId).order('at').limit(500);
+  if (!data?.length || currentWs?.id !== wsId) return;
+  const label = id => { const e = document.getElementById(id); return e?.closest('label')?.querySelector('span')?.textContent?.trim() || id; };
+  const short = v => v == null ? '—' : (v.length > 80 ? v.slice(0, 80) + '…' : v);
+  el.innerHTML = `<div class="chg-head">Changes by people other than the nominated supervisor (recorded automatically)</div>` + data.map(x =>
+    `<div class="chg-row"><b>${esc(label(x.field))}</b> — ${esc(x.by_name || '?')} · ${new Date(x.at).toLocaleString('en-AU', { dateStyle: 'short', timeStyle: 'short' })} · <i>${esc(short(x.old_value))}</i> → ${esc(short(x.new_value))}</div>`).join('');
+}
+
+/* One nominated supervisor per day sheet: only they (or a manager) can edit it. Managers' edits are logged server-side. */
+const wsViewOnly = () => !!currentWs && !isManager() && currentWs.supervisorId !== me?.id;
+const wsReadOnly = () => !!currentWs && (currentWs.locked || wsViewOnly());
+const editingAsOther = () => !!currentWs && isManager() && currentWs.supervisorId !== me?.id;
 function applyLock() {
-  const locked = !!currentWs?.locked;
-  $('#appView').classList.toggle('locked', locked);
-  $('#lockBtn').classList.toggle('hidden', locked);
-  $('#coLockBtn')?.classList.toggle('hidden', locked);
+  const locked = !!currentWs?.locked, ro = wsReadOnly();
+  $('#appView').classList.toggle('locked', ro);
+  $('#lockBtn').classList.toggle('hidden', ro);
+  $('#coLockBtn')?.classList.toggle('hidden', ro);
   const ln = $('#coLockNote'); if (ln && !locked) ln.textContent = 'Last step of the day — check the compliance panel above first. Supervisor signature, fit-to-dive declarations, bottom times and notifiable determinations must be complete; other gaps can be signed past with a reason. A manager can unlock with a reason.';
   if (ln && locked) ln.innerHTML = `🔒 Signed off by ${esc(currentWs.lockedBy || 'supervisor')}${currentWs.lockedAt ? ' · ' + new Date(currentWs.lockedAt).toLocaleString('en-AU', { dateStyle: 'short', timeStyle: 'short' }) : ''}`;
   $$('#optMenu .edit-only').forEach(el => el.classList.toggle('hidden', locked));
@@ -5237,11 +5296,20 @@ function applyLock() {
   const b = $('#lockBanner');
   b.classList.toggle('hidden', !locked);
   if (locked) b.innerHTML = `🔒 <b>Signed off</b> by ${esc(currentWs.lockedBy || 'supervisor')}${currentWs.lockedAt ? ' on ' + new Date(currentWs.lockedAt).toLocaleString('en-AU', { dateStyle:'short', timeStyle:'short' }) : ''} — read only.${isManager() ? ' Unlock from the Options menu to edit.' : ''}`;
+  if (!locked && currentWs) {
+    const sup = esc(currentWs.supervisorName || 'not set');
+    const reassign = isManager() ? ` <button class="btn sm ghost" data-act="reassignSupervisor" style="pointer-events:auto;opacity:1">Change supervisor</button>` : '';
+    if (wsViewOnly()) { b.classList.remove('hidden'); b.innerHTML = `👁 <b>View only</b> — ${sup} is the nominated supervisor for this day sheet. Only they (or a manager) can make changes.`; }
+    else if (editingAsOther()) { b.classList.remove('hidden'); b.innerHTML = `✏️ <b>Editing as a manager</b> — ${sup} is the nominated supervisor. Every change you make is recorded against your name.${reassign}`; }
+    else if (isManager()) { b.classList.remove('hidden'); b.innerHTML = `Nominated supervisor: <b>${sup}</b>${reassign}`; }
+  }
+  const ds = $('#da_supervisor'); if (ds) { ds.readOnly = true; ds.title = 'Nominated supervisor — a manager can change it'; if (currentWs?.supervisorName) ds.value = currentWs.supervisorName; }
 }
 
 async function openWorksheet(ws, job) {
   currentWs = { id: ws.id, job_id: ws.job_id, ws_date: ws.ws_date, version: ws.version || 0,
-                locked: !!ws.locked, lockedBy: ws.locked_by_name, lockedAt: ws.locked_at };
+                locked: !!ws.locked, lockedBy: ws.locked_by_name, lockedAt: ws.locked_at,
+                supervisorId: ws.supervisor_id || null, supervisorName: ws.supervisor || '' };
   currentJob = job;
   editSeq = 0; syncedSeq = 0;
   pruneCaches();
@@ -5252,6 +5320,7 @@ async function openWorksheet(ws, job) {
     try { remote = await fetchWorksheet(ws.id); }
     catch (e) { console.warn('fetch failed', e); }
   }
+  if (remote) { currentWs.supervisorId = remote.supervisor_id || null; currentWs.supervisorName = remote.supervisor || currentWs.supervisorName; }
   if (cache?.dirty) {
     // Unsynced edits on this device win; push them (conflict check happens in doPush)
     await applyState(cache.data);
@@ -5277,6 +5346,7 @@ async function openWorksheet(ws, job) {
   lockJobFields(job, ws.ws_date);
   if (REGION_CONFIG[job.region] && currentRegion() !== job.region) { setRegion(job.region, true); editSeq++; saveState(); }
   applyLock();
+  loadWorksheetEdits();
   activeTab = null; switchTab('setup');
   document.title = `${job.job_no} — Daily Worksheet ${fmtDate(ws.ws_date)}`;
   flushFiles();
@@ -5798,7 +5868,7 @@ function hardBlocks(st) {
   return [...new Set(out)];
 }
 async function lockWorksheet() {
-  if (!currentWs || currentWs.locked) return;
+  if (!currentWs || wsReadOnly()) return;
   if (!online()) { toast('Signing off needs a connection', 2200); return; }
   const stNow = buildStateObject();
   const hard = hardBlocks(stNow);
@@ -5919,6 +5989,7 @@ async function doPush(wsId = currentWs?.id) {
     const { data, error } = await sb.from('worksheets')
       .update({ data: cache.data, version: cache.version + 1,
                 supervisor: cache.data?.fields?.da_supervisor || null,
+                ...(isCur && currentWs.supervisorId ? { supervisor_id: currentWs.supervisorId } : {}),
                 summary: summarise(cache.data),
                 updated_by: me.id, updated_by_name: me.name, updated_at: new Date().toISOString() })
       .eq('id', wsId).eq('version', cache.version).eq('locked', false).select('version');
@@ -6258,29 +6329,27 @@ async function handleConflict() {
   let remote;
   try { remote = await fetchWorksheet(currentWs.id); } catch (e) { setSync('error'); return; }
   const who = remote.updated_by_name || 'another device';
-  let theirs;
   if (remote.locked) {
     alert(`This worksheet was signed off by ${remote.locked_by_name || 'the supervisor'} on another device. Loading the signed-off version; edits made here since are discarded.`);
-    theirs = true;
     currentWs.locked = true; currentWs.lockedBy = remote.locked_by_name; currentWs.lockedAt = remote.locked_at;
-  } else {
-    theirs = confirm(`This worksheet was updated by ${who} since this device last synced.\n\n` +
-      `OK = load their version (edits made here since then are lost)\nCancel = keep this version and overwrite theirs`);
   }
-  if (theirs) {
-    renderAll();
-    await applyState(remote.data || {});
-    currentWs.version = remote.version;
-    editSeq = 0; syncedSeq = 0;
-    writeCache(remote.data || {}, remote.version, false, 0);
-    lockJobFields(currentJob, currentWs.ws_date); applyLock();
-    reshowTab(); setSync('synced');
-  } else {
-    const c = readCache();
-    writeCache(c.data, remote.version, true, c.seq);
-    currentWs.version = remote.version;
-    pushAgain = true;
+  // The server copy always wins — nothing is overwritten. What this device had that differs is kept in the change log.
+  const mine = readCache()?.data?.fields || {}, srv = remote.data?.fields || {};
+  const diff = Object.keys({ ...mine, ...srv }).filter(k => (mine[k] ?? '') !== (srv[k] ?? '') && !/^d\d+s\d+_(totalDive|totalBottom|ndlCap)$/.test(k));
+  currentWs.supervisorId = remote.supervisor_id || currentWs.supervisorId; currentWs.supervisorName = remote.supervisor || currentWs.supervisorName;
+  renderAll();
+  await applyState(remote.data || {});
+  currentWs.version = remote.version;
+  editSeq = 0; syncedSeq = 0;
+  writeCache(remote.data || {}, remote.version, false, 0);
+  lockJobFields(currentJob, currentWs.ws_date); applyLock();
+  if (diff.length && !wsReadOnly()) {
+    changeLog.push({ at: new Date().toISOString(), by: me.name, action: 'Sync clash — newer version loaded',
+      reason: `${who} saved first. Values on this device not applied: ` + diff.slice(0, 40).map(k => `${k}: ${String(mine[k] ?? '—').slice(0, 60)}`).join('; ') + (diff.length > 40 ? ` (+${diff.length - 40} more)` : '') });
+    renderChangeLog(); editSeq++; saveState();
+    alert(`This sheet was saved by ${who} on another device first. Their version is now loaded; ${diff.length} value(s) from this device were not applied and are listed in the change log.`);
   }
+  reshowTab(); setSync('synced');
 }
 
 /* Pull a newer version when the tab comes back into view and nothing is pending here */
