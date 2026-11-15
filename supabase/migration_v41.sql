@@ -3,7 +3,7 @@
 --  • Only the nominated supervisor can edit an unsigned sheet. Managers can edit any sheet (signed or not);
 --    every edit made by anyone other than the nominated supervisor is recorded field by field in worksheet_edits.
 --  • Anyone signed in (not a guest) can start a job or a new day and nominate its supervisor.
---    Changing the nominated supervisor on an existing sheet is a manager action (logged).
+--    The nominated supervisor can hand an unsigned sheet over to someone else; managers can reassign any sheet (both logged).
 --  • Files on a sheet: the nominated supervisor while unsigned; managers always. Job files: managers or the job's creator.
 
 -- ---------- columns + backfill (exact name match within the region) ----------
@@ -43,12 +43,15 @@ declare uid uuid := auth.uid(); who text;
   jwt_role text := coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb->>'role', '');
 begin
   if jwt_role <> 'authenticated' then return new; end if;   -- service role / direct SQL
-  if new.supervisor_id is distinct from old.supervisor_id and not public.is_manager() then
-    raise exception 'only a manager can change the nominated supervisor';
+  -- the nominated supervisor can hand over their own unsigned sheet; managers can reassign any sheet
+  if new.supervisor_id is distinct from old.supervisor_id and not public.is_manager()
+     and not (uid is not distinct from old.supervisor_id and not old.locked) then
+    raise exception 'only the nominated supervisor or a manager can change the nominated supervisor';
   end if;
   if uid is not distinct from old.supervisor_id and new.supervisor_id is not distinct from old.supervisor_id then
     return new;   -- the nominated supervisor editing their own sheet
   end if;
+  -- (a handover by the nominated supervisor falls through and is logged below)
   select full_name into who from public.profiles where id = uid;
 
   if new.supervisor_id is distinct from old.supervisor_id then

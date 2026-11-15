@@ -5252,19 +5252,29 @@ async function pickSupervisor(region, defaultId, question) {
     d.showModal();
   });
 }
+const canHandOver = () => !!currentWs && (isManager() || (currentWs.supervisorId === me?.id && !currentWs.locked));
 async function reassignSupervisor() {
-  if (!currentWs || !isManager()) return;
+  if (!canHandOver()) return;
   if (!online()) { toast('Changing the supervisor needs a connection', 2200); return; }
-  const pick = await pickSupervisor(currentJob?.region || me.region, currentWs.supervisorId, 'Change the nominated supervisor for this day sheet to:');
+  const pick = await pickSupervisor(currentJob?.region || me.region, currentWs.supervisorId, isManager() ? 'Change the nominated supervisor for this day sheet to:' : 'Hand this day sheet over to:');
   if (!pick || pick.id === currentWs.supervisorId) return;
+  if (!isManager() && !confirm(`Hand over to ${pick.name}? You won't be able to edit this sheet after that (they or a manager can hand it back).`)) return;
   const reason = prompt(`Hand this day sheet from ${currentWs.supervisorName || 'nobody'} to ${pick.name}. Reason (recorded on the sheet):`);
   if (reason == null) return;
   if (!reason.trim()) { toast('A reason is required', 2000); return; }
-  changeLog.push({ at: new Date().toISOString(), by: me.name, action: 'Supervisor changed', reason: `${currentWs.supervisorName || '—'} → ${pick.name}: ${reason.trim()}` });
-  currentWs.supervisorId = pick.id; currentWs.supervisorName = pick.name;
+  // Record the handover while this device can still write, then send it with the new supervisor in one save
+  changeLog.push({ at: new Date().toISOString(), by: me.name, action: isManager() ? 'Supervisor changed' : 'Handed over', reason: `${currentWs.supervisorName || '—'} → ${pick.name}: ${reason.trim()}` });
   const ds = $('#da_supervisor'); if (ds) ds.value = pick.name;
-  renderChangeLog(); applyLock();
-  editSeq++; saveState(); pushWorksheet();
+  renderChangeLog();
+  clearTimeout(saveTimer); editSeq++; saveState(); clearTimeout(pushTimer);
+  const prevId = currentWs.supervisorId, prevName = currentWs.supervisorName;
+  currentWs.supervisorId = pick.id; currentWs.supervisorName = pick.name;
+  await doPush(currentWs.id);
+  if (readCache()?.dirty) {   // not saved — put it back so nothing is half-done
+    currentWs.supervisorId = prevId; currentWs.supervisorName = prevName; applyLock();
+    toast('Handover not saved — check your connection and try again', 3000); return;
+  }
+  applyLock();
   toast(`✓ ${pick.name} is now the nominated supervisor`, 2200);
 }
 /* Edits by anyone other than the nominated supervisor (written by the database, read-only here) */
@@ -5298,10 +5308,10 @@ function applyLock() {
   if (locked) b.innerHTML = `🔒 <b>Signed off</b> by ${esc(currentWs.lockedBy || 'supervisor')}${currentWs.lockedAt ? ' on ' + new Date(currentWs.lockedAt).toLocaleString('en-AU', { dateStyle:'short', timeStyle:'short' }) : ''} — read only.${isManager() ? ' Unlock from the Options menu to edit.' : ''}`;
   if (!locked && currentWs) {
     const sup = esc(currentWs.supervisorName || 'not set');
-    const reassign = isManager() ? ` <button class="btn sm ghost" data-act="reassignSupervisor" style="pointer-events:auto;opacity:1">Change supervisor</button>` : '';
+    const reassign = canHandOver() ? ` <button class="btn sm ghost" data-act="reassignSupervisor" style="pointer-events:auto;opacity:1">${isManager() ? 'Change supervisor' : 'Hand over'}</button>` : '';
     if (wsViewOnly()) { b.classList.remove('hidden'); b.innerHTML = `👁 <b>View only</b> — ${sup} is the nominated supervisor for this day sheet. Only they (or a manager) can make changes.`; }
     else if (editingAsOther()) { b.classList.remove('hidden'); b.innerHTML = `✏️ <b>Editing as a manager</b> — ${sup} is the nominated supervisor. Every change you make is recorded against your name.${reassign}`; }
-    else if (isManager()) { b.classList.remove('hidden'); b.innerHTML = `Nominated supervisor: <b>${sup}</b>${reassign}`; }
+    else { b.classList.remove('hidden'); b.innerHTML = `Nominated supervisor: <b>${sup}</b>${reassign}`; }
   }
   const ds = $('#da_supervisor'); if (ds) { ds.readOnly = true; ds.title = 'Nominated supervisor — a manager can change it'; if (currentWs?.supervisorName) ds.value = currentWs.supervisorName; }
 }
