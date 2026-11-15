@@ -2521,6 +2521,21 @@ function syncDivesToActivity() {
 
 /* === 12. Activity log ============================================ */
 
+/* Diver tag on an activity row. Built only from a diver number and an escaped name — stored markup is never
+ * put back into the page (older sheets saved raw tag HTML; that is parsed as text only). */
+function diverTagHTML(idx, name) {
+  idx = Math.trunc(+idx);
+  if (!(idx >= 0 && idx < NUM_DIVERS)) return '';
+  return `<span class="tag" data-diver="${idx}" data-name="${esc(name || '')}" style="background:${DIVER_COLORS[idx]}">D${idx + 1}${name ? ' — ' + esc(name) : ''}</span>`;
+}
+function rowTagHTML(row) {
+  if (row?.tagDiver != null && row.tagDiver !== '') return diverTagHTML(row.tagDiver, row.tagName);
+  if (!row?.tagHTML) return '';
+  const text = (new DOMParser().parseFromString(String(row.tagHTML), 'text/html').body.textContent || '').trim();   // inert parse, no script runs
+  const m = /^D([1-8])(?:\s+—\s+(.*))?$/.exec(text);
+  return m ? diverTagHTML(+m[1] - 1, m[2] || '') : '';
+}
+
 function seedActivityRows(n) {
   for (let i = 0; i < n; i++) addActivityRow(false);
 }
@@ -2844,8 +2859,7 @@ function addFloatLog() {
   if (m) {
     const idx = +m[1] - 1;
     const name = $('#diver_' + idx + '_name')?.value || '';
-    tagHTML = `<span class="tag" style="background:${DIVER_COLORS[idx]}">D${idx+1}${
-      name ? ' — ' + esc(name) : ''}</span>`;
+    tagHTML = diverTagHTML(idx, name);
     desc = m[2];
   }
 
@@ -2944,7 +2958,8 @@ function buildStateObject() {
     return {
       time: tr.querySelector('input[data-time]').value,
       desc: td.querySelector('input[type=text]').value,
-      tagHTML: td.classList.contains('tagged') ? td.querySelector('.tag').outerHTML : ''
+      ...(td.classList.contains('tagged') ? (() => { const t = td.querySelector('.tag');
+            return { tagDiver: +t.dataset.diver, tagName: t.dataset.name || '', tagHTML: diverTagHTML(+t.dataset.diver, t.dataset.name || '') }; })() : { tagHTML: '' })
     };
   });
   // Sub-dive counts per diver
@@ -3021,10 +3036,11 @@ async function _applyState(s) {
     body.querySelectorAll('tr:not(.auto-row)').forEach(tr => tr.remove());
     for (const row of s.activity) {
       const tr = h('tr');
-      const tagged = row.tagHTML ? ' class="tagged"' : '';
+      const tagHTML = rowTagHTML(row);
+      const tagged = tagHTML ? ' class="tagged"' : '';
       tr.innerHTML = `
         <td>${timeSelect('', row.time || '')}</td>
-        <td${tagged}>${row.tagHTML || ''}<input type="text" value="${esc(row.desc || '')}"></td>`;
+        <td${tagged}>${tagHTML}<input type="text" value="${esc(row.desc || '')}"></td>`;
       body.appendChild(tr);
     }
   }
