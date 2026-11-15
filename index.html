@@ -4598,14 +4598,17 @@ async function changePassword() {
 
 async function onSignedIn(user) {
   me = { id: user.id, email: user.email, name: user.user_metadata?.full_name || user.email.split('@')[0], role: 'guest' };   // no profile read = no access
-  try {
-    const { data } = await sb.from('profiles').select('full_name, role, region, can_view_management').eq('id', user.id).maybeSingle();
-    if (data?.full_name) me.name = data.full_name;
-    if (data?.role) me.role = data.role;
-    me.region = data?.region || null;
-    me.mgmt = !!data?.can_view_management;
+  // Read the profile; if that fails (no signal on site) use this device's last good copy. Only a real read is cached.
+  let data = null;
+  try { const res = await sb.from('profiles').select('full_name, role, region, can_view_management').eq('id', user.id).maybeSingle(); if (!res.error) data = res.data; }
+  catch (e) { /* offline */ }
+  if (data) {
+    if (data.full_name) me.name = data.full_name;
+    if (data.role) me.role = data.role;
+    me.region = data.region || null;
+    me.mgmt = !!data.can_view_management;
     try { localStorage.setItem('franmarine_me', JSON.stringify(me)); } catch (e) {}
-  } catch (e) {
+  } else {
     try { const c = JSON.parse(localStorage.getItem('franmarine_me')); if (c?.id === user.id) me = c; } catch (e2) {}
   }
   if (me.role === 'guest') { showPending(); return; }
