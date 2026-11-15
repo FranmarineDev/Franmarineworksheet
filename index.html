@@ -734,9 +734,25 @@ body:has(.floatlog.open) .fab{display:none}
       <div class="login-err" id="recoverErr"></div>
       <button class="btn" type="submit" id="recoverBtn">Set password &amp; sign in</button>
     </form>
-    <div class="login-foot">
+    <form id="signupForm" class="hidden" autocomplete="on">
+      <p class="muted" style="margin-bottom:12px">Create an account. A manager has to approve it before you can see any jobs.</p>
+      <label class="f"><span>Full name</span><input id="suName" autocomplete="name" required></label>
+      <label class="f"><span>Email</span><input type="email" id="suEmail" autocomplete="username" required></label>
+      <label class="f"><span>Password</span><input type="password" id="suPass" autocomplete="new-password" minlength="8" required placeholder="At least 8 characters"></label>
+      <label class="f"><span>Confirm password</span><input type="password" id="suPass2" autocomplete="new-password" minlength="8" required></label>
+      <div class="login-err" id="suErr"></div>
+      <button class="btn" type="submit" id="suBtn">Create account</button>
+    </form>
+    <div id="pendingPanel" class="hidden" style="text-align:center">
+      <p style="font-size:16px;font-weight:600;margin-bottom:8px">Awaiting approval</p>
+      <p class="muted" id="pendingMsg" style="margin-bottom:14px">Your account has been created. A manager has been notified and needs to approve it before you can see any jobs.</p>
+      <button class="btn" type="button" data-act="refreshPending">Check again</button>
+      <div style="margin-top:10px"><button class="link" type="button" data-act="signOut">Sign out</button></div>
+    </div>
+    <div class="login-foot" id="loginFoot">
       <button class="link" type="button" data-act="forgotPass">Forgot password?</button>
-      <div style="margin-top:8px">Access is by invitation — contact your regional manager.</div>
+      <div style="margin-top:8px" id="signupLinkRow">New here? <button class="link" type="button" data-act="showSignup">Create an account</button></div>
+      <div style="margin-top:8px" class="hidden" id="backToLoginRow"><button class="link" type="button" data-act="showLogin">Back to sign in</button></div>
     </div>
   </div>
 </div>
@@ -754,6 +770,7 @@ body:has(.floatlog.open) .fab{display:none}
   <main class="dash mgmt">
     <div id="mgmtIncBanner" class="inc-banner hidden"></div>
     <div id="mgmtAuditBanner" class="dash-banner hidden"></div>
+    <div class="dash-banner pending-users-banner hidden" data-act="openPendingUsers" style="cursor:pointer"></div>
     <div class="dash-head">
       <div>
         <h1 class="dash-title">Management View</h1>
@@ -840,6 +857,7 @@ body:has(.floatlog.open) .fab{display:none}
   </header>
   <main class="dash">
     <div id="dashBanner" class="dash-banner hidden"></div>
+    <div class="dash-banner pending-users-banner hidden" data-act="openPendingUsers" style="cursor:pointer"></div>
     <div id="pendingBanner" class="pending-banner hidden"></div>
     <div id="incBanner" class="inc-banner hidden"></div>
     <div class="dash-head">
@@ -875,6 +893,10 @@ body:has(.floatlog.open) .fab{display:none}
     <div class="sec hidden" id="usersPanel">
       <h2>Users <span class="muted" style="text-transform:none;font-weight:400">People only see their own region's jobs, crew and worksheets. New accounts start in NSW — move them here if they belong in WA.</span></h2>
       <div class="user-row head"><span>Name</span><span class="em">Email</span><span>Role</span><span>Region</span><span>Link</span><span></span></div>
+      <div id="pendingUsers" class="hidden" style="margin-bottom:14px;padding:10px 12px;border:1px solid #f0d58a;background:#fff8e6;border-radius:8px">
+        <h3 style="margin:0 0 6px">Awaiting approval <span class="muted" style="text-transform:none;font-weight:400">— people who signed up themselves. They can't see anything until approved. Only approve people you recognise.</span></h3>
+        <div id="pendingRows"></div>
+      </div>
       <div id="userRows"></div>
       <div class="mt" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <button class="btn sm" data-act="sendLinkAll" id="sendLinkAllBtn">✉ Send new-link email to everyone listed</button>
@@ -4325,6 +4347,12 @@ const ACT = {
   clearAll:          clearAll,
   /* auth + dashboard */
   forgotPass:        forgotPassword,
+  showSignup:        () => { showLoginPane('signup'); setTimeout(() => $('#suName').focus(), 50); },
+  showLogin:         () => showLoginPane('login'),
+  refreshPending:    refreshPending,
+  openPendingUsers:  openPendingUsers,
+  approveUser:       el => approveUser(el.dataset.id),
+  rejectUser:        el => rejectUser(el.dataset.id),
   signOut:           signOut,
   refreshDash:       () => loadDashboard(true),
   newJob:            () => showJobForm(null),
@@ -4369,7 +4397,7 @@ const ACT = {
   inviteUser:        inviteUser,
   removeUser:        el => removeUser(el.dataset.id),
   sendLinkOne:       el => { const u = usersList.find(x => x.id === el.dataset.id); if (u && confirm(`Email ${u.email} a link to this address (choose password + open app)?`)) sendLinkTo([u]); },
-  sendLinkAll:       () => { const list = usersList.filter(u => (u.region || 'NSW') === me.region && u.email); if (list.length && confirm(`Email all ${list.length} ${me.region} users a link to this address?\n\nThe wording comes from the Supabase "Reset Password" email template — check it says what you want first.`)) sendLinkTo(list); },
+  sendLinkAll:       () => { const list = usersList.filter(u => u.role !== 'guest' && (u.region || 'NSW') === me.region && u.email); if (list.length && confirm(`Email all ${list.length} ${me.region} users a link to this address?\n\nThe wording comes from the Supabase "Reset Password" email template — check it says what you want first.`)) sendLinkTo(list); },
   addCrew:           addCrew,
   removeCrew:        el => removeCrew(el.dataset.id),
   showSummary:       el => showSummary(el.dataset.job),
@@ -4541,10 +4569,10 @@ async function initAuth() {
   sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   // A reset-password or invitation link signs the person in via the URL hash; they must set a password before they go anywhere.
   const linkType = (location.hash.match(/[#&]type=(recovery|invite|signup|magiclink)/) || [])[1];
-  needPassword = linkType === 'recovery' || linkType === 'invite' || linkType === 'signup';
+  needPassword = linkType === 'recovery' || linkType === 'invite';   // a self sign-up chose a password when signing up
   sb.auth.onAuthStateChange(async (event, session) => {
     if (event === 'PASSWORD_RECOVERY') { needPassword = true; showSetPassword(); return; }
-    if (event === 'SIGNED_OUT') { me = null; needPassword = false; showView('login'); }
+    if (event === 'SIGNED_OUT') { me = null; needPassword = false; showLoginPane('login'); }
   });
   const { data: { session } } = await sb.auth.getSession();
   if (session && needPassword) { showSetPassword(linkType === 'invite' || linkType === 'signup'); return; }
@@ -4569,7 +4597,7 @@ async function changePassword() {
 }
 
 async function onSignedIn(user) {
-  me = { id: user.id, email: user.email, name: user.user_metadata?.full_name || user.email.split('@')[0], role: 'supervisor' };
+  me = { id: user.id, email: user.email, name: user.user_metadata?.full_name || user.email.split('@')[0], role: 'guest' };   // no profile read = no access
   try {
     const { data } = await sb.from('profiles').select('full_name, role, region, can_view_management').eq('id', user.id).maybeSingle();
     if (data?.full_name) me.name = data.full_name;
@@ -4580,6 +4608,7 @@ async function onSignedIn(user) {
   } catch (e) {
     try { const c = JSON.parse(localStorage.getItem('franmarine_me')); if (c?.id === user.id) me = c; } catch (e2) {}
   }
+  if (me.role === 'guest') { showPending(); return; }
   $('#userChip').textContent = me.name + (isManager() ? '' : ' · supervisor');
   $$('.mgr-only').forEach(el => el.classList.toggle('hidden', !isManager()));
   // Everyone is pinned to their home region (the database enforces it too)
@@ -4590,6 +4619,7 @@ async function onSignedIn(user) {
   paintRegionSeg();
   loadDocs();
   $('#toMgmtBtn').classList.toggle('hidden', !me.mgmt);
+  refreshPendingBanner();
   if (me.mgmt) { await openManagement(); return; }
   await loadDashboard();
   showView('dash');
@@ -4626,6 +4656,71 @@ async function forgotPassword() {
   if (!email) return;
   const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
   $('#loginErr').textContent = error ? error.message : 'Reset link sent — check your email.';
+}
+
+/* ---- Self sign-up: new accounts are guests until a manager approves them ---- */
+function showLoginPane(which) {   // 'login' | 'signup' | 'pending'
+  $('#loginForm').classList.toggle('hidden', which !== 'login');
+  $('#recoverForm').classList.add('hidden');
+  $('#signupForm').classList.toggle('hidden', which !== 'signup');
+  $('#pendingPanel').classList.toggle('hidden', which !== 'pending');
+  $('#loginFoot').classList.toggle('hidden', which === 'pending');
+  $('#signupLinkRow').classList.toggle('hidden', which !== 'login');
+  $('#backToLoginRow').classList.toggle('hidden', which !== 'signup');
+  showView('login');
+}
+function showPending(msg) {
+  if (msg) $('#pendingMsg').textContent = msg;
+  showLoginPane('pending');
+}
+$('#signupForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const full_name = $('#suName').value.trim(), email = $('#suEmail').value.trim().toLowerCase();
+  if ($('#suPass').value !== $('#suPass2').value) { $('#suErr').textContent = 'The two passwords do not match.'; return; }
+  const btn = $('#suBtn'); btn.disabled = true; $('#suErr').textContent = '';
+  const { data, error } = await sb.auth.signUp({ email, password: $('#suPass').value,
+    options: { data: { full_name }, emailRedirectTo: location.origin + location.pathname } });
+  btn.disabled = false;
+  if (error) { $('#suErr').textContent = /not allowed|disabled/i.test(error.message) ? 'Sign-ups are switched off — ask your regional manager for an invite.' : error.message; return; }
+  $('#suPass').value = $('#suPass2').value = '';
+  if (data.session) { await onSignedIn(data.user); return; }   // email confirmation off: straight to the pending screen
+  showPending(`Check your email (${email}) and click the confirmation link. A manager is then notified and has to approve your account before you can see any jobs.`);
+});
+async function refreshPending() {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) { showLoginPane('login'); return; }
+  await onSignedIn(session.user);
+  if (me?.role === 'guest') toast('Not approved yet', 1800);
+}
+/* Managers: banner when sign-ups are waiting, and the approve / reject actions */
+async function refreshPendingBanner() {
+  const els = $$('.pending-users-banner');
+  if (!isManager() || !online()) { els.forEach(el => el.classList.add('hidden')); return; }
+  const { data } = await sb.from('profiles').select('id').eq('role', 'guest');
+  const n = data?.length || 0;
+  els.forEach(el => { el.classList.toggle('hidden', !n); el.textContent = `🔔 ${n} new sign-up${n === 1 ? '' : 's'} awaiting approval — tap to review`; });
+}
+function openPendingUsers() {
+  if ($('#mgmtView').classList.contains('active')) mgmtTool('toggleUsers');
+  else { $('#usersPanel').classList.add('hidden'); ACT.toggleUsers(); setTimeout(() => $('#pendingUsers')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80); }
+}
+async function approveUser(id) {
+  const u = usersList.find(x => x.id === id); if (!u) return;
+  const role = $(`#pend_role_${id}`).value, region = $(`#pend_region_${id}`).value;
+  if (!confirm(`Approve ${u.full_name || u.email} as a ${role} in ${region}? They will see ${region} jobs straight away.`)) return;
+  const { error } = await sb.from('profiles').update({ role, region }).eq('id', id);
+  if (error) { $('#usersErr').textContent = error.message; return; }
+  toast(`✓ ${u.full_name || u.email} approved`, 2000);
+  await loadUsers(); refreshPendingBanner();
+}
+async function rejectUser(id) {
+  const u = usersList.find(x => x.id === id); if (!u) return;
+  if (!confirm(`Reject and delete the sign-up for ${u.full_name || ''} (${u.email})?`)) return;
+  const { data, error } = await sb.functions.invoke('remove-user', { body: { user_id: id } });
+  const msg = error ? (await error.context?.json?.().catch(() => null))?.error || error.message : data?.error;
+  if (msg) { $('#usersErr').textContent = msg; return; }
+  toast('Sign-up rejected', 1800);
+  await loadUsers(); refreshPendingBanner();
 }
 
 async function signOut() {
@@ -4962,7 +5057,7 @@ async function fillSupervisorList() {
     const { data } = await sb.from('profiles').select('id, email, full_name, role, region').order('full_name');
     if (data) usersList = data;
   }
-  $('#supervisorList').innerHTML = usersList.filter(u => (u.region || 'NSW') === region && u.full_name).map(u => `<option value="${esc(u.full_name)}">`).join('');
+  $('#supervisorList').innerHTML = usersList.filter(u => u.role !== 'guest' && u.region === region && u.full_name).map(u => `<option value="${esc(u.full_name)}">`).join('');
 }
 
 async function deleteJob() {
@@ -5954,7 +6049,18 @@ async function loadUsers() {
   usersList = data; $('#usersErr').textContent = ''; renderUsers(); renderStorageGauge();
 }
 function renderUsers() {
-  const visible = usersList.filter(u => (u.region || 'NSW') === me.region);
+  const pending = usersList.filter(u => u.role === 'guest');
+  $('#pendingUsers').classList.toggle('hidden', !pending.length);
+  $('#pendingRows').innerHTML = pending.map(u => `
+    <div class="user-row">
+      <span><b>${esc(u.full_name || u.email?.split('@')[0] || '—')}</b></span>
+      <span class="muted em">${esc(u.email || '')}</span>
+      <select id="pend_role_${u.id}"><option value="supervisor">Supervisor</option><option value="manager">Manager</option></select>
+      <select id="pend_region_${u.id}"><option ${me.region === 'NSW' ? 'selected' : ''}>NSW</option><option ${me.region === 'WA' ? 'selected' : ''}>WA</option></select>
+      <button class="btn sm" data-act="approveUser" data-id="${u.id}">✓ <span class="lbl">Approve</span></button>
+      <button class="btn sm ghost" data-act="rejectUser" data-id="${u.id}" style="color:#b42318" title="Delete this sign-up">✕ <span class="lbl">Reject</span></button>
+    </div>`).join('');
+  const visible = usersList.filter(u => u.role !== 'guest' && (u.region || 'NSW') === me.region);
   $('#userRows').innerHTML = visible.map(u => `
     <div class="user-row">
       <span><b>${esc(u.full_name || u.email?.split('@')[0] || '—')}</b>${u.id === me.id ? ' <span class="muted">(you)</span>' : ''}</span>

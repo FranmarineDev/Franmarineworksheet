@@ -1,5 +1,5 @@
 // Supabase Edge Function: remove-user
-// Lets a signed-in MANAGER delete another account in their own region. The person can no longer
+// Lets a signed-in MANAGER delete another account in their own region, or reject any pending (guest) sign-up. The person can no longer
 // sign in; worksheets, incidents and reports they wrote are kept (their name stays in the sheet
 // data — only the "created by / updated by" pointers are cleared so the delete can go through).
 // Secrets: SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY (set automatically).
@@ -26,9 +26,10 @@ Deno.serve(async (req) => {
     if (!user_id || typeof user_id !== "string") return json({ error: "user_id required" }, 400);
     if (user_id === user.id) return json({ error: "you can't remove yourself" }, 400);
 
-    const { data: target } = await admin.from("profiles").select("id, email, full_name, region").eq("id", user_id).single();
+    const { data: target } = await admin.from("profiles").select("id, email, full_name, region, role").eq("id", user_id).single();
     if (!target) return json({ error: "user not found" }, 404);
-    if (target.region !== me.region) return json({ error: `${target.full_name || target.email} is in ${target.region} — only a ${target.region} manager can remove them` }, 403);
+    // Pending sign-ups (guests) have no region yet — any manager can reject them
+    if (target.role !== "guest" && target.region !== me.region) return json({ error: `${target.full_name || target.email} is in ${target.region} — only a ${target.region} manager can remove them` }, 403);
 
     // Clear the pointers that reference this profile so the delete isn't blocked. Sheet content is untouched.
     const clears: [string, string[]][] = [
