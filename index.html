@@ -583,6 +583,15 @@ img{max-width:100%;height:auto}
 .decl-ticks{grid-column:1/-1;display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--text)}
 .decl-ticks label{display:inline-flex;align-items:center;gap:5px;cursor:pointer}
 .decl-ticks input{width:auto;min-height:0;margin:0}
+.th-auto{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:6px}
+.th-auto>div{background:var(--navy-l);border-radius:5px;padding:7px 10px;min-width:0}
+.th-auto small{display:block;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px}
+.th-auto b{font-weight:600;overflow-wrap:anywhere}
+.th-h{font-size:13px;margin:14px 0 8px;color:var(--navy)}
+.th-h .muted{font-weight:400;margin-left:6px}
+.th-tick{display:flex;align-items:center;gap:8px;align-self:end;min-height:34px;font-weight:600;cursor:pointer}
+.th-tick input{width:18px;height:18px;min-height:0;margin:0;flex:none}
+@media(max-width:700px){.th-auto{grid-template-columns:1fr 1fr}}
 .dive-verify{border-top:1px dashed var(--border-2);padding-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .dive-verify .sig-row{margin-bottom:0;grid-template-columns:1fr auto;row-gap:4px}
 .dive-verify .sig-row .sig-name{grid-column:1/-1;font-size:11px;text-transform:uppercase;letter-spacing:.3px;color:var(--navy)}
@@ -1611,6 +1620,26 @@ function pageSWMS() {
       </div>
     </div>
 
+    <div class="sec" id="thalesSec" style="display:none">
+      <h2>Thales Site Record <span class="muted" style="text-transform:none;font-weight:400">Shown because the job card's client is Thales (NSW). Prints on the SWMS page of the worksheet PDF.</span></h2>
+      <div class="muted mb">From the job card and today's crew — change these on the job card, Project Overview or Diving Log, not here.</div>
+      <div id="thalesAuto" class="th-auto"></div>
+      <h3 class="th-h">Once per job <span class="muted">carries over to each new day sheet</span></h3>
+      <div class="g3">
+        ${F('th_mercuryRef','Mercury Signal Reference')}
+        ${F('th_mercuryDate','Mercury Signal Date', { type:'date' })}
+        ${F('th_oneTag','One Tag Isolation Number')}
+        ${F('th_hsePartner','Thales HSE Partner')}
+        ${F('th_assembly','Assembly Area')}
+      </div>
+      <h3 class="th-h">Today <span class="muted">fill in every day</span></h3>
+      <div class="g3">
+        ${F('th_oodName','Officer of the Day — Name')}
+        ${F('th_oodPh','Officer of the Day — Number', { type:'tel' })}
+        <label class="th-tick"><input type="checkbox" id="th_mercuryCurrent"> Mercury Signal confirmed current</label>
+      </div>
+    </div>
+
     <div class="sec">
       <h2>Team Sign-Off</h2>
       <div class="muted mb">I have read and understood this SWMS and agree to work in accordance with its controls.</div>
@@ -1906,6 +1935,7 @@ function renderAll() {
   applyDivingMode();
   applyClassification();
   applyNotifiable();
+  applyThales();
 }
 
 
@@ -1918,6 +1948,7 @@ function switchTab(tab) {
   $$('.page').forEach(p => p.classList.toggle('active', p.dataset.tab === tab));
   $$('.nav, .pill').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   if (tab === 'co') { renderCloseoutSummary(); renderCompliance(); }
+  if (tab === 'swms') applyThales();
   if (window.innerWidth < 860) $('#sidebar').classList.remove('open');
   // Materialise any pending signatures on the newly-visible page
   $$(`#page-${tab} canvas[data-sig]`).forEach(c => {
@@ -3080,6 +3111,7 @@ async function _applyState(s) {
   sortActivityLog();
   applyClassification();
   applyNotifiable();
+  applyThales();
 }
 
 
@@ -3321,7 +3353,8 @@ async function buildReportHTML(ctx = {}) {
 
   // ---- 5. SWMS sign-off + attached SWMS pages
   const swmsSigs = team.some((n, i) => st.sigs[`swms_signOff_${i}`]);
-  if (F_('swms_title') || swmsF || swmsSigs) {
+  const thalesOn = isThalesJob(job, region, F_('da_client'));
+  if (F_('swms_title') || swmsF || swmsSigs || thalesOn) {
     let pages = '';
     if (swmsF) {
       if (swmsF.archived) pages = `<div class="muted">SWMS PDF “${esc(swmsF.name)}” is on file (archived — pages not reproduced here).</div>`;
@@ -3333,6 +3366,10 @@ async function buildReportHTML(ctx = {}) {
       cards([['SWMS Title / Document No.', F_('swms_title')], ['Revision', F_('swms_rev')], ['Date of SWMS', F_('swms_date')]]) +
       (F_('swms_highRisk') ? sub('Description of High Risk Work') + lines(F_('swms_highRisk')) : '') +
       sub('Team Sign-Off') + '<div class="muted" style="margin-bottom:8px">I have read and understood this SWMS and agree to work in accordance with its controls.</div>' + sigGrid('swms_signOff') +
+      (thalesOn ? band('Thales Site Record') +
+        cards(thalesAutoPairs(F_, team, job, st.divingMode !== false)) +
+        sub('Job details') + cards([['Mercury Signal Reference', F_('th_mercuryRef')], ['Mercury Signal Date', F_('th_mercuryDate')], ['One Tag Isolation Number', F_('th_oneTag')], ['Thales HSE Partner', F_('th_hsePartner')], ['Assembly Area', F_('th_assembly')]]) +
+        sub('Today') + cards([['Officer of the Day', F_('th_oodName')], ['Officer of the Day — Number', F_('th_oodPh')], ['Mercury Signal confirmed current', F_('th_mercuryCurrent') === 'on' ? 'Yes — confirmed' : 'NOT CONFIRMED']]) : '') +
       (swmsF ? `<div class="fname">${esc(swmsF.name)}</div>` + pages : '')));
   }
 
@@ -4118,6 +4155,35 @@ function applyClassification() {
     : 'GENERAL DIVING WORK — Pt 4.8 Div 2–3 apply directly; AS/NZS 2299.1 applies as the Franmarine adopted standard (departures are internal NCs).' + (cons ? ' Construction work is flagged — check the classification: diving that is construction work is high risk diving work.' : '');
 }
 
+/* Thales site record — NSW jobs whose job-card client is Thales. Block sits on the SWMS page and prints with it. */
+const isThalesJob = (job, region, sheetClient) =>
+  (job?.region || region) === 'NSW' && /thales/i.test(job?.client || sheetClient || '');
+/* The day's crew against roles, from the supervisor field, the diving log slots and the team roster */
+function thalesCrew(f, team) {
+  const uniq = a => [...new Set(a.map(x => (x || '').trim()).filter(Boolean))];
+  const slot = k => uniq(Array.from({ length: NUM_DIVERS }, (_, i) => f(`diver_${i}_${k}`)));
+  const sup = (f('da_supervisor') || '').trim();
+  const divers = slot('name'), standby = slot('standby'), attendants = slot('attendant');
+  const used = new Set([sup, ...divers, ...standby, ...attendants].map(n => n.toLowerCase()));
+  return { sup, divers, standby, attendants, other: uniq(team || []).filter(n => !used.has(n.toLowerCase())) };
+}
+function thalesAutoPairs(f, team, job, diving) {
+  const c = thalesCrew(f, team), j = a => a.join(', ');
+  const p = [['Job No.', job?.job_no || f('da_jobNo')], ['Ship / Facility', f('da_vessel') || job?.vessel || ''], ['Berth / Location', f('da_location') || job?.location || ''],
+             [diving ? 'Dive Supervisor' : 'Supervisor', c.sup]];
+  if (diving) p.push(['Divers', j(c.divers)], ['Standby Diver', j(c.standby)], ['Attendants', j(c.attendants)]);
+  p.push([diving ? 'Other Crew' : 'Crew', j(c.other)]);
+  return p;
+}
+function applyThales() {
+  const sec = $('#thalesSec'); if (!sec) return;
+  const on = isThalesJob(currentJob, currentRegion(), CV('da_client'));
+  sec.style.display = on ? '' : 'none';
+  if (!on) return;
+  $('#thalesAuto').innerHTML = thalesAutoPairs(CV, teamMembers, currentJob, divingMode)
+    .map(([l, v]) => `<div><small>${esc(l)}</small><b>${esc(v) || '—'}</b></div>`).join('');
+}
+
 function loggedDives(st) {
   const f = id => (st.fields?.[id] || '').trim(); const out = [];
   for (let i = 0; i < NUM_DIVERS; i++) {
@@ -4468,6 +4534,7 @@ document.addEventListener('input', e => {
   if (t.id?.startsWith('diver_') && t.id.endsWith('_name')) syncDivesToActivity();
   if (t.id?.startsWith('cl_'))            { applyClassification(); if (t.id === 'cl_chamberCat') calcDiveTotalTimes(); }
   if (t.id === 'da_location' || t.id === 'da_vessel') applyNotifiable();
+  if (/^(da_|diver_)/.test(t.id || '') || t.dataset.teamIdx != null) applyThales();
   if (t.id === 'ed_type' || t.dataset.drillTime) syncDrillToActivity();
   if (t.dataset.autoEdit)                 autoRowEdits[t.dataset.autoEdit] = t.value;
   if (t.id === 'dv_hatModel1')            updateHatSerials(1);
@@ -5164,7 +5231,7 @@ function prefillFromJob(job, wsDate) {
 function reshowTab() { const t = activeTab; activeTab = null; switchTab(t || 'setup'); }
 
 /* Fields worth carrying from the previous day's sheet on the same job */
-const CARRY_RE = /^(da_(client|location|vessel|supervisor|contact|contactPh|drillRequired)|dv_(hatModel|hatSerial|hatCheck)\d|dv_chamber(Ph)?|dv_(danPh|hyperDoc|mxAsset)|cl_\w+|swms_(title|rev|date|highRisk))$/;
+const CARRY_RE = /^(da_(client|location|vessel|supervisor|contact|contactPh|drillRequired)|dv_(hatModel|hatSerial|hatCheck)\d|dv_chamber(Ph)?|dv_(danPh|hyperDoc|mxAsset)|cl_\w+|swms_(title|rev|date|highRisk)|th_(mercuryRef|mercuryDate|oneTag|hsePartner|assembly))$/;
 
 async function openTodayWorksheet(jobId) {
   const job = jobsById[jobId]; if (!job) return;
