@@ -343,6 +343,12 @@ td.tagged input{flex:1;min-width:0}
   border-radius:0 4px 4px 0}
 .dive-sub-head{font-weight:600;margin-bottom:8px;font-size:13px;
   display:flex;justify-content:space-between;align-items:center}
+/* Per-dive results row: Bottom Time · Dive Time · RG · Incident (wide) */
+.dive-res{display:grid;grid-template-columns:1fr 1fr 90px 2.4fr;gap:10px;align-items:end}
+@media (max-width:860px){.dive-res{grid-template-columns:1fr 1fr 90px}.dive-res>label.f:last-child{grid-column:1/-1}}
+@media (max-width:520px){.dive-res{grid-template-columns:1fr}}
+/* EANx O2 % / MOD only shows when Breathing Gas is EANx, or when it already holds a value */
+.dive-sub:not(:has(select[id$="_gas"] option[value="EANx"]:checked)) .eanx-only:not(:has(input:not(:placeholder-shown))){display:none}
 
 .chk{display:grid;grid-template-columns:1fr 110px;gap:10px;align-items:center;
   padding:6px 0;border-bottom:1px solid var(--border)}
@@ -2412,30 +2418,30 @@ function addSubDive(diverIdx) {
       <button class="link" data-act="removeSubDive"
               data-diver="${diverIdx}" data-sub="${subIdx}">Remove</button>
     </div>
-    <div class="g4">
-      ${F(p('leftSurf'),   'Left Surface',    { type:'time' })}
-      ${F(p('depth'),      'Max Depth (m)',   { type:'number' })}
-      ${F(p('leftBottom'), 'Left Bottom',     { type:'time' })}
-      ${F(p('arrSurf'),    'Arrived Surface', { type:'time' })}
-    </div>
-    <div class="g4 mt">
-      ${F(p('totalBottom'), 'Bottom Time (min)',    { type:'number' })}
-      ${F(p('totalDive'),   'Dive Time (min)',      { type:'number' })}
-      ${F(p('ndl'),         'NDL (min) — DCIEM',    { type:'number' })}
-      ${F(p('ndlCap'),      'Planned BT Cap (min)', { type:'number' })}
+    <div class="g3">
+      ${F(p('depth'),  'Max Depth (m)',        { type:'number' })}
+      ${F(p('ndl'),    'NDL (min) — DCIEM',    { type:'number' })}
+      ${F(p('ndlCap'), 'Planned BT Cap (min)', { type:'number' })}
     </div>
     <div class="g4 mt">
       ${F(p('si'), 'Surface Interval', { list:'siList' })}
       ${S(p('rf'), 'RF', RF_OPTIONS)}
-      ${S(p('rg'), 'RG', RG_OPTIONS)}
-      ${F(p('bailout'), 'Bail Out Pressure (Bar)', { type:'number' })}
-    </div>
-    <div class="g3 mt">
-      ${F(p('bailoutL'), 'Bail Out Cylinder (L water cap.)', { type:'number' })}
       ${S(p('gas'), 'Breathing Gas', ['Air','EANx'])}
+      ${F(p('bailoutL'), 'Bail Out Cylinder (L water cap.)', { type:'number' })}
+    </div>
+    <div class="mt eanx-only">
       ${F(p('o2'), 'EANx O2 % / MOD', { pl:'e.g. 32% / 33 m' })}
     </div>
-    <div class="mt">
+    <div class="g4 mt">
+      ${F(p('bailout'),    'Bail Out Pressure (Bar)', { type:'number' })}
+      ${F(p('leftSurf'),   'Left Surface',    { type:'time' })}
+      ${F(p('leftBottom'), 'Left Bottom',     { type:'time' })}
+      ${F(p('arrSurf'),    'Arrived Surface', { type:'time' })}
+    </div>
+    <div class="dive-res mt">
+      ${F(p('totalBottom'), 'Bottom Time (min)', { type:'number' })}
+      ${F(p('totalDive'),   'Dive Time (min)',   { type:'number' })}
+      ${S(p('rg'), 'RG', RG_OPTIONS)}
       ${F(p('incident'), 'Incident / difficulty / discomfort / injury — never blank (write "Nil")', { pl:'Nil' })}
     </div>
     <div class="dive-verify mt">
@@ -3845,7 +3851,7 @@ function buildSpecimenPDF(K) {
       if (sigs) bits.push(sigs);
       if (decl) bits.push('Declaration: ' + decl);
       if (sec.id === 'planSec' || sec.querySelector('.drop')) bits.push('PDF upload, rendered inline');
-      if (sec.querySelector('#diveEntries')) bits.push(`${NUM_DIVERS} diver slots — per diver: Diver Name, Attendant, Standby Diver, diver checks (${DIVER_CHECKS.map(c => c[1]).join(', ')}); per dive: Left Surface, Max Depth (m), Left Bottom, Arrived Surface, Bottom Time, Dive Time, NDL (DCIEM), Planned BT Cap, Surface Interval, RF, RG, Bail Out Pressure (bar), Bail Out Cylinder (L), Breathing Gas, EANx O2 % / MOD, Incident / difficulty (never blank), diver and supervisor verification signatures (s 181)`);
+      if (sec.querySelector('#diveEntries')) bits.push(`${NUM_DIVERS} diver slots — per diver: Diver Name, Attendant, Standby Diver, diver checks (${DIVER_CHECKS.map(c => c[1]).join(', ')}); per dive: Max Depth (m), NDL (DCIEM), Planned BT Cap, Surface Interval, RF, Breathing Gas, Bail Out Cylinder (L), EANx O2 % / MOD (when gas is EANx), Bail Out Pressure (bar), Left Surface, Left Bottom, Arrived Surface, Bottom Time, Dive Time, RG, Incident / difficulty (never blank), diver and supervisor verification signatures (s 181)`);
       if (sec.querySelector('#activityBody')) bits.push('Rows: Time (24 h) · Activity / Description; pinned payroll rows Start Day, Departed Workshop, Arrived Onsite (top) and Job Completed, Departed Site, Arrived Workshop, Finished Day (bottom)');
       if (bits.length) K.para(bits.join('\n'));
     }
