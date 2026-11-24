@@ -1022,6 +1022,10 @@ body:has(.floatlog.open) .fab{display:none}
           <span id="jobSwmsName" class="muted"></span>
           <button class="btn sm ghost hidden" id="jobSwmsRemove" data-act="removeJobSwms" style="color:#b42318">Remove</button>
         </div>
+        <label style="display:flex;gap:8px;align-items:flex-start;margin-top:8px;text-transform:none;font-weight:400;cursor:pointer">
+          <input type="checkbox" id="jf_swms_pages_daily" checked style="margin-top:3px">
+          <span>Print the SWMS pages in every day sheet PDF <span class="muted">— turn off for long jobs: each day keeps its SWMS sign-off and signatures, and the worksheet package includes the SWMS pages once at the end</span></span>
+        </label>
       </div>
       <div class="login-err" id="jobErr"></div>
       <div class="flex mt" style="gap:8px;flex-wrap:wrap">
@@ -3362,7 +3366,9 @@ async function buildReportHTML(ctx = {}) {
   const thalesOn = isThalesJob(job, region, F_('da_client'));
   if (F_('swms_title') || swmsF || swmsSigs || thalesOn) {
     let pages = '';
-    if (swmsF) {
+    const swmsDaily = job?.swms_pages_daily !== false;
+    if (swmsF && !swmsDaily) pages = `<div class="muted">SWMS PDF “${esc(swmsF.name)}” is on file for this job. Its pages are not repeated in each day sheet — they are included once at the end of the worksheet package.</div>`;
+    else if (swmsF) {
       if (swmsF.archived) pages = `<div class="muted">SWMS PDF “${esc(swmsF.name)}” is on file (archived — pages not reproduced here).</div>`;
       else if (swmsF.pending) pages = `<div class="muted">SWMS PDF “${esc(swmsF.name)}” is attached but not yet rendered for preview.</div>`;
       else for (const ref of swmsF.pages) { const src = await resolveRef(ref); pages += src ? `<div class="pg"><img src="${src}"></div>` : '<div class="muted">Page not available offline.</div>'; }
@@ -3605,6 +3611,17 @@ async function downloadPackage(jobId) {
       const d = buildDaySummaryData(st, job, byWs[w.id] || []);
       rows.push([fmtDate(w.ws_date), esc(d.supervisor || w.updated_by_name || ''), String(d.team.length), d.diving ? String(d.dives) : 'Non-diving', fmtHrs(d.bottom_min), fmtHrs(d.paid_min), d.incidents.length ? `<b style="color:#c0392b">${d.incidents.length}</b>` : '—', w.locked ? '<b style="color:#27ae60">Signed off</b>' : (d.issues.length ? `<span style="color:#e67e22">${d.issues.length} missing</span>` : 'Working copy')]);
       parts.push(...await buildReportHTML({ st, job, ws: w, incidents: byWs[w.id] || [], parts: true }));
+    }
+    if (job.swms_pages_daily === false) {   // SWMS pages once, at the end, instead of in every day
+      const seen = new Set(), docs = [];
+      for (const w of sheets) {
+        const f = w.data?.swms; if (!f || f.archived || f.pending || !Array.isArray(f.pages) || !f.pages.length) continue;
+        const key = (f.raw || f.pages[0] || f.name); if (seen.has(key)) continue; seen.add(key);
+        let pages = '';
+        for (const ref of f.pages) { const src = await resolveRef(ref); pages += src ? `<div class="pg"><img src="${src}"></div>` : '<div class="muted">Page not available.</div>'; }
+        docs.push(`<div class="fname">${esc(f.name)} — first used ${esc(fmtDate(w.ws_date))}</div>${pages}`);
+      }
+      if (docs.length) parts.push(`<table class="doc"><tbody><tr><td class="body"><div class="band">Safe Work Method Statement${docs.length === 1 ? '' : 's'} for this job</div><div class="muted">Included once here rather than in every day sheet. Each day's SWMS sign-off and team signatures are in that day's sheet.</div>${docs.join('')}</td></tr></tbody></table>`);
     }
     const totPaid = sheets.reduce((a, w) => a + (buildDaySummaryData(w.data || { fields: {} }, job, []).paid_min || 0), 0);
     const totDives = sheets.reduce((a, w) => a + buildDaySummaryData(w.data || { fields: {} }, job, []).dives, 0);
@@ -4995,6 +5012,7 @@ function showJobForm(job) {
     $('#jf_' + k).value = job?.[k] ?? (k === 'region' ? me.region : '');
   $('#jf_quoted_hours_per_day').value = job?.quoted_hours_per_day ?? ''; $('#jf_quoted_days').value = job?.quoted_days ?? '';
   $('#jf_work_type').value = job?.work_type === 'nondiving' ? 'nondiving' : 'diving';
+  $('#jf_swms_pages_daily').checked = job?.swms_pages_daily !== false;
   $('#jobForm').dataset.prevSupervisor = job?.supervisor || '';
   jobSwms = job?.swms ? normaliseEntry(job.swms, 'swms') : null; jobSwmsDirty = false; paintJobSwms();
   jobPlan = job?.dive_plan ? normaliseEntry(job.dive_plan, 'plan') : null; jobPlanDirty = false; paintJobPlan();
@@ -5014,6 +5032,7 @@ async function saveJob() {
   for (const k of ['job_no','project','region','client','location','vessel','start_date','supervisor','contact','contact_ph'])
     row[k] = $('#jf_' + k).value.trim() || null;
   row.work_type = $('#jf_work_type').value === 'nondiving' ? 'nondiving' : 'diving';
+  row.swms_pages_daily = $('#jf_swms_pages_daily').checked;
   row.quoted_hours_per_day = $('#jf_quoted_hours_per_day').value === '' ? null : +$('#jf_quoted_hours_per_day').value;
   row.quoted_days = $('#jf_quoted_days').value === '' ? null : Math.round(+$('#jf_quoted_days').value);
   row.crew = pickedJobCrew();
