@@ -6345,6 +6345,8 @@ function issuesFromState(d) {
   if (d?.divingMode !== false) {
     let dives = 0; for (let i = 0; i < NUM_DIVERS; i++) for (let j = 0; j < (d?.sub?.[i] || 1); j++) if (f[`d${i}s${j}_leftSurf`]) dives++;
     if (!dives) out.push('Dive log');
+    // Once a dive is logged, both hats (Diver 1 and Diver 2) must be recorded as model + serial (soft gap)
+    else if (![1, 2].every(n => f['dv_hatModel' + n] && f['dv_hatSerial' + n])) out.push('Hat model / serial');
   }
   if (!f.tb_cl_9) out.push('"Considered safe to proceed"');
   if (!f.cl_class) out.push('Classification');
