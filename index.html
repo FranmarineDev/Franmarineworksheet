@@ -3193,28 +3193,70 @@ function fillReportTab(w, html, title) {
     .then(() => setTimeout(() => { try { w.focus(); w.print(); } catch (e) {} }, 300));
 }
 
+/* Export PDF: options (download a real PDF file, or send to the printer; SWMS pages in or out). The SWMS sign-off and
+   every signature are always included — only the attached SWMS document pages are optional. */
+function exportOptions() {
+  return new Promise(resolve => {
+    const swmsF = swmsFile; const defPages = currentJob?.swms_pages_daily !== false;
+    const d = document.createElement('dialog');
+    d.className = 'export-dlg';
+    d.style.cssText = 'border:none;border-radius:12px;padding:20px;max-width:440px;width:92vw;box-shadow:0 10px 40px rgba(0,0,0,.3);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#1a2332';
+    d.innerHTML = `<h3 style="margin:0 0 14px;color:#002060;font-size:18px">Export day sheet</h3>
+      <fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:700;font-size:13px;color:#5b6472;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Output</legend>
+        <label style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid #d7dde5;border-radius:8px;margin-bottom:8px;cursor:pointer"><input type="radio" name="exOut" value="download" checked style="margin-top:3px"><span><b>Download PDF</b><br><span style="color:#5b6472;font-size:13px">Saves a PDF file to this device${isIOS() ? ' (Save to Files from the share sheet)' : ''}</span></span></label>
+        <label style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid #d7dde5;border-radius:8px;cursor:pointer"><input type="radio" name="exOut" value="print" style="margin-top:3px"><span><b>Send to printer</b><br><span style="color:#5b6472;font-size:13px">Opens the print dialog</span></span></label>
+      </fieldset>
+      <label style="display:flex;gap:10px;align-items:flex-start;cursor:pointer${swmsF ? '' : ';opacity:.55'}"><input type="checkbox" id="exSwms" ${swmsF && defPages ? 'checked' : ''} ${swmsF ? '' : 'disabled'} style="margin-top:3px">
+        <span><b>Include the SWMS document pages</b><br><span style="color:#5b6472;font-size:13px">${swmsF ? `${esc(swmsF.name)}${swmsF.pages?.length ? ` · ${swmsF.pages.length} pages` : ''}. ` : 'No SWMS PDF attached to this sheet. '}The SWMS sign-off and all signatures are always included.</span></span></label>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:20px"><button type="button" class="btn ghost" value="cancel">Cancel</button><button type="button" class="btn" value="ok">Export</button></div>`;
+    document.body.appendChild(d);
+    const close = v => { d.close(); d.remove(); resolve(v); };
+    d.querySelector('[value=cancel]').onclick = () => close(null);
+    d.addEventListener('cancel', e => { e.preventDefault(); close(null); });
+    d.querySelector('[value=ok]').onclick = () => {
+      const out = d.querySelector('input[name=exOut]:checked').value;
+      // iPhone/iPad only allow the print tab to open inside this tap
+      const tab = out === 'print' && isIOS() ? openReportTab() : null;
+      close({ out, swmsPages: !!d.querySelector('#exSwms')?.checked, tab });
+    };
+    d.showModal();
+  });
+}
+
 async function exportPDF(el, ev, force = false) {
-  if (navigator.standalone) {
+  const unsigned = unsignedList(buildStateObject());
+  if (unsigned.length && !force) { showSigWarning(unsigned, () => exportPDF(null, null, true)); return; }
+  const opt = await exportOptions(); if (!opt) return;
+  if (opt.out === 'print' && navigator.standalone) {
     // iOS Home Screen apps can't print. Hand over to Safari, which can.
-    const go = confirm('Export PDF needs Safari.\n\nOK opens this app in Safari — sign in, open this worksheet, then Options → Export PDF → Share → Save to Files / Print.');
-    if (go) window.open(location.href, '_blank');
+    if (confirm('Printing needs Safari.\n\nOK opens this app in Safari — sign in, open this worksheet, then Options → Export PDF → Send to printer.')) window.open(location.href, '_blank');
     return;
   }
-  const tab = isIOS() ? openReportTab() : null;   // must open inside the tap, before any await
-  const unsigned = unsignedList(buildStateObject());
-  if (unsigned.length && !force) { tab?.close(); showSigWarning(unsigned, () => exportPDF(null, null, true)); return; }
-  toast('Preparing PDF…', 4000);
   const job  = $('#da_jobNo')?.value || 'Worksheet';
   const date = $('#da_date')?.value  || todayISO();
+  const fileTitle = `${job} ${date} Daily Worksheet`.replace(/\s+/g, ' ').trim();
+  toast(opt.out === 'download' ? 'Building PDF…' : 'Preparing PDF…', 6000);
   let html;
-  try { html = await buildReportHTML(); }
-  catch (e) { console.warn(e); tab?.close(); alert('Could not build the PDF: ' + e.message); return; }
-  const fileTitle = `${job}_${date}_DailyWorksheet`.replace(/\s+/g, '_');
+  try { html = await buildReportHTML({ swmsPages: opt.swmsPages }); }
+  catch (e) { console.warn(e); opt.tab?.close(); alert('Could not build the PDF: ' + e.message); return; }
   // S4 — record the export on the sheet (this is the copy filed in SharePoint)
-  exportLog.push({ at: new Date().toISOString(), by: me?.name || '', file: fileTitle + '.pdf', signedOff: !!currentWs?.locked });
+  exportLog.push({ at: new Date().toISOString(), by: me?.name || '', file: fileTitle + '.pdf', signedOff: !!currentWs?.locked, swmsPages: opt.swmsPages, output: opt.out });
   renderChangeLog(); if (currentWs) { try { const c = readCache(); const st = buildStateObject(); writeCache(st, currentWs.version, c?.dirty || false, c?.seq || editSeq); } catch (e) {} }
+
+  if (opt.out === 'download') {
+    try {
+      const blob = await htmlToPdfBlob(html, (i, n) => toast(`Building PDF… ${Math.round(i / n * 100)}%`, 8000));
+      await deliverPdf(blob, fileTitle + '.pdf');
+    } catch (e) { console.warn(e); alert('Could not build the PDF: ' + (e.message || e) + '\n\nTry "Send to printer" and save as PDF from the print dialog instead.'); }
+    return;
+  }
+  printReportHTML(html, fileTitle, opt.tab);
+}
+
+/* Print path (unchanged behaviour): a hidden frame on desktop, a tab on iPhone/iPad */
+function printReportHTML(html, fileTitle, tab) {
   if (tab) { fillReportTab(tab, html, fileTitle); return; }
-  if (isIOS()) toast('Pop-ups are blocked — allow them for this site in Safari settings to export', 4000);
+  if (isIOS()) toast('Pop-ups are blocked — allow them for this site in Safari settings to print', 4000);
   const origTitle = document.title;
   document.title = fileTitle;
   $('#reportFrame')?.remove();
@@ -3232,6 +3274,130 @@ async function exportPDF(el, ev, force = false) {
     f.contentWindow.focus();
     f.contentWindow.print();
   };
+}
+
+/* ---- Real PDF file from the report HTML ----
+   The report is laid out off-screen at A4 width, each section is cut into pages at clean points (never through a row,
+   card or signature box), the section header is stamped on every page, and full-page SWMS / plan images go in directly. */
+const H2C_URL = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+async function htmlToPdfBlob(html, onProgress) {
+  if (!window.jspdf?.jsPDF) throw new Error('PDF tools are still loading — try again in a moment');
+  const { jsPDF } = window.jspdf;
+  const PX = 794, PAGE_PX = 1123, MM = 210 / PX, BOTTOM_PX = 38;   // A4 at 96 dpi; 10 mm bottom margin
+  const fr = document.createElement('iframe');
+  fr.setAttribute('aria-hidden', 'true');
+  fr.style.cssText = `position:fixed;left:-12000px;top:0;width:${PX}px;height:${PAGE_PX}px;border:0`;
+  const extra = `<style>html,body{width:${PX}px;margin:0}</style><script src="${H2C_URL}"><\/script>`;
+  fr.srcdoc = /<\/head>/i.test(html) ? html.replace(/<\/head>/i, extra + '</head>') : extra + html;
+  document.body.appendChild(fr);
+  try {
+    await new Promise((res, rej) => { fr.onload = res; setTimeout(() => rej(new Error('timed out laying out the report')), 45000); });
+    const w = fr.contentWindow, d = fr.contentDocument;
+    if (!w.html2canvas) throw new Error('the PDF tool could not load — check your connection');
+    await Promise.all(Array.from(d.images).filter(i => !i.complete).map(i => new Promise(r => { i.onload = i.onerror = r; })));
+    try { await d.fonts?.ready; } catch (e) {}
+    fr.style.height = Math.max(PAGE_PX, d.documentElement.scrollHeight) + 'px';
+    const pdf = new jsPDF({ unit: 'mm', format: 'a4', compress: true });
+    let first = true;
+    const newPage = () => { if (!first) pdf.addPage(); first = false; };
+    const shot = (el, scale) => w.html2canvas(el, { scale, backgroundColor: '#ffffff', logging: false, useCORS: true,
+      windowWidth: PX, windowHeight: d.documentElement.scrollHeight, scrollX: 0, scrollY: 0 });
+    const imgToJpeg = (img, maxW) => {
+      const k = Math.min(1, maxW / (img.naturalWidth || maxW));
+      const c = document.createElement('canvas'); c.width = Math.round((img.naturalWidth || 1) * k); c.height = Math.round((img.naturalHeight || 1) * k);
+      const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(img, 0, 0, c.width, c.height);
+      return { url: c.toDataURL('image/jpeg', 0.85), w: c.width, h: c.height };
+    };
+    const sections = Array.from(d.querySelectorAll('table.doc'));
+    if (!sections.length) throw new Error('nothing to export');
+    for (let si = 0; si < sections.length; si++) {
+      const sec = sections[si];
+      const head = sec.querySelector(':scope > thead');
+      const body = sec.querySelector(':scope > tbody > tr > td.body') || sec.querySelector(':scope > tbody');
+      let headImg = null, headPx = 0;
+      if (head) { const c = await shot(head, 2); headImg = c.toDataURL('image/jpeg', 0.92); headPx = head.getBoundingClientRect().height; }
+      // full-page document images go in natively, after the section's text
+      const pgs = Array.from(body.querySelectorAll('.pg'));
+      const pgImgs = pgs.map(p => p.querySelector('img')).filter(Boolean);
+      pgs.forEach(p => { p.style.display = 'none'; });
+      const availPx = PAGE_PX - BOTTOM_PX - headPx;
+      const bRect = body.getBoundingClientRect(), top0 = bRect.top, totalH = bRect.height;
+      const atoms = Array.from(body.querySelectorAll('tr, .card, .sig, .chip, .band, .sub, .dvband, .muted, .fname, .notes > div, p, h1, h2, h3, li, img, .big'))
+        .filter(el => el.offsetParent !== null)
+        .map(el => { const r = el.getBoundingClientRect(); return { t: r.top - top0, b: r.bottom - top0, keep: el.matches('.band, .sub, .dvband, h1, h2, h3, thead tr') }; })
+        .filter(a => a.b - a.t > 1);
+      const cuts = [0];
+      while (totalH - cuts[cuts.length - 1] > availPx) {
+        const start = cuts[cuts.length - 1], limit = start + availPx;
+        let cut = limit;
+        for (let g = 0; g < 300; g++) {   // step up past anything the cut would split (boxes taller than a page excepted)
+          const hit = atoms.find(a => a.t < cut - 0.5 && a.b > cut + 0.5 && a.b - a.t < availPx);
+          if (!hit) break;
+          cut = hit.t;
+        }
+        // never leave a heading stranded at the bottom of a page
+        for (let g = 0; g < 4; g++) {   // a heading followed by a table header row moves over as a pair
+          const orphan = atoms.filter(a => a.keep && a.b <= cut + 0.5 && cut - a.b < 24 && a.t < cut - 0.5).sort((x, y) => y.t - x.t)[0];
+          if (!orphan || orphan.t <= start + 40) break;
+          cut = orphan.t;
+        }
+        if (cut <= start + 40) cut = limit;   // a single box taller than a page: cut it
+        cuts.push(Math.floor(cut));
+      }
+      cuts.push(Math.ceil(totalH));
+      const scale = Math.max(1, Math.min(2, Math.sqrt(15e6 / (PX * Math.max(totalH, 1)))));   // stay under phone canvas limits
+      const canvas = totalH > 2 ? await shot(body, scale) : null;
+      for (let i = 0; canvas && i < cuts.length - 1; i++) {
+        const y0 = cuts[i], h = cuts[i + 1] - y0;
+        if (h < 4 || (i > 0 && h < 30 && i === cuts.length - 2)) continue;   // skip slivers of trailing padding
+        const pc = document.createElement('canvas'); pc.width = canvas.width; pc.height = Math.max(1, Math.round(h * scale));
+        const g = pc.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, pc.width, pc.height);
+        g.drawImage(canvas, 0, Math.round(y0 * scale), canvas.width, pc.height, 0, 0, pc.width, pc.height);
+        newPage();
+        if (headImg) pdf.addImage(headImg, 'JPEG', 0, 0, 210, headPx * MM);
+        pdf.addImage(pc.toDataURL('image/jpeg', 0.85), 'JPEG', 0, headPx * MM, 210, h * MM);
+      }
+      for (const img of pgImgs) {
+        if (!img.naturalWidth) continue;
+        newPage();
+        if (headImg) pdf.addImage(headImg, 'JPEG', 0, 0, 210, headPx * MM);
+        const j = imgToJpeg(img, 1600);
+        const top = headPx * MM + 4, maxW = 182, maxH = 297 - top - 12;
+        const k = Math.min(maxW / j.w, maxH / j.h), wmm = j.w * k, hmm = j.h * k;
+        pdf.addImage(j.url, 'JPEG', (210 - wmm) / 2, top, wmm, hmm);
+        pdf.setDrawColor(227, 231, 238); pdf.rect((210 - wmm) / 2, top, wmm, hmm);
+      }
+      pgs.forEach(p => { p.style.display = ''; });
+      onProgress?.(si + 1, sections.length);
+      await new Promise(r => setTimeout(r, 0));
+    }
+    const n = pdf.getNumberOfPages();
+    for (let i = 1; i <= n; i++) { pdf.setPage(i); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7.5); pdf.setTextColor(107, 114, 128); pdf.text(`Page ${i} of ${n}`, 196, 291, { align: 'right' }); }
+    return pdf.output('blob');
+  } finally { fr.remove(); }
+}
+
+/* Hand the finished PDF to the person: a download on computers; on iPhone/iPad a "PDF ready" sheet whose button opens
+   the share sheet (Save to Files, Mail…) — the share sheet needs a fresh tap after the PDF has been built. */
+async function deliverPdf(blob, name) {
+  const file = new File([blob], name, { type: 'application/pdf' });
+  const download = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 60000); };
+  if (!isIOS()) { download(); toast(`✓ ${name} downloaded`, 2500); return; }
+  const d = document.createElement('dialog');
+  d.style.cssText = 'border:none;border-radius:12px;padding:20px;max-width:400px;width:90vw;box-shadow:0 10px 40px rgba(0,0,0,.3);font:15px/1.45 -apple-system,system-ui,sans-serif;color:#1a2332';
+  d.innerHTML = `<h3 style="margin:0 0 8px;color:#002060">PDF ready</h3><p style="margin:0 0 16px;color:#5b6472">${esc(name)} · ${Math.max(1, Math.round(blob.size / 1024))} KB</p>
+    <div style="display:flex;gap:8px;justify-content:flex-end"><button type="button" class="btn ghost" value="x">Close</button><button type="button" class="btn" value="s">Save / Share</button></div>`;
+  document.body.appendChild(d);
+  const close = () => { d.close(); d.remove(); };
+  d.querySelector('[value=x]').onclick = close;
+  d.querySelector('[value=s]').onclick = async () => {
+    try {
+      if (navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file], title: name });
+      else download();
+      close();
+    } catch (e) { if (e?.name !== 'AbortError') { download(); close(); } }
+  };
+  d.showModal();
 }
 
 /* ---- Report builder: branded A4 document matching the original Daily Worksheet export ---- */
@@ -3366,8 +3532,10 @@ async function buildReportHTML(ctx = {}) {
   const thalesOn = isThalesJob(job, region, F_('da_client'));
   if (F_('swms_title') || swmsF || swmsSigs || thalesOn) {
     let pages = '';
-    const swmsDaily = job?.swms_pages_daily !== false;
-    if (swmsF && !swmsDaily) pages = `<div class="muted">SWMS PDF “${esc(swmsF.name)}” is on file for this job. Its pages are not repeated in each day sheet — they are included once at the end of the worksheet package.</div>`;
+    const swmsDaily = ctx.swmsPages ?? (job?.swms_pages_daily !== false);
+    if (swmsF && !swmsDaily) pages = ctx.swmsPages === false
+      ? `<div class="muted">SWMS PDF “${esc(swmsF.name)}” is on file in the Daily Worksheet. Its pages are not included in this export.</div>`
+      : `<div class="muted">SWMS PDF “${esc(swmsF.name)}” is on file for this job. Its pages are not repeated in each day sheet — they are included once at the end of the worksheet package.</div>`;
     else if (swmsF) {
       if (swmsF.archived) pages = `<div class="muted">SWMS PDF “${esc(swmsF.name)}” is on file (archived — pages not reproduced here).</div>`;
       else if (swmsF.pending) pages = `<div class="muted">SWMS PDF “${esc(swmsF.name)}” is attached but not yet rendered for preview.</div>`;
