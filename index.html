@@ -684,6 +684,18 @@ td input.time24{font-weight:600;text-align:center}
 .sig-modal ul{margin:0 0 16px 18px;padding:0;font-size:13px;display:flex;flex-direction:column;gap:4px;max-height:40vh;overflow:auto}
 .sig-modal ul li span{font-size:11px;text-transform:uppercase;letter-spacing:.3px;color:var(--muted);margin-right:6px}
 .sig-modal-actions{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap}
+/* pop-up dialogs: the global margin reset pins <dialog> top-left — put them back in the centre of the screen */
+dialog{margin:auto;max-height:calc(100vh - 32px);overflow:auto}
+dialog::backdrop{background:rgba(0,0,0,.55)}
+.ex-dlg{border:none;border-radius:10px;padding:20px 22px;width:min(460px,calc(100vw - 32px));box-shadow:0 20px 60px rgba(0,0,0,.3);color:var(--text)}
+.ex-dlg h2{font-size:17px;color:var(--navy);padding-bottom:8px;border-bottom:2px solid var(--navy);margin-bottom:16px}
+.ex-dlg .f{display:flex;flex-direction:column;gap:4px;margin-bottom:14px}
+.ex-dlg .f>span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;font-weight:500}
+.ex-dlg .seg{display:flex;width:100%}
+.ex-dlg .seg button{flex:1}
+.ex-dlg .seg button:disabled{color:var(--muted);cursor:not-allowed}
+.ex-dlg .hint{font-size:12px;color:var(--muted);margin-top:2px}
+.ex-dlg .sig-modal-actions{margin-top:6px;padding-top:14px;border-top:1px solid var(--border)}
 .floatlog.open{bottom:0;left:0;right:0;width:100%;max-width:none;border-radius:20px 20px 0 0;padding:0 24px 28px;gap:14px;
   box-shadow:0 -6px 40px rgba(0,32,96,.22);border:none;border-top:1px solid var(--border)}
 .floatlog.open::before{content:'';display:block;width:48px;height:4px;background:var(--border-2);border-radius:2px;margin:14px auto -4px;flex-shrink:0}
@@ -1049,7 +1061,7 @@ body:has(.floatlog.open) .fab{display:none}
   <div class="opt-wrap">
     <button class="opt-btn" data-act="toggleOpt">Options ▾</button>
     <div class="opt-menu" id="optMenu">
-      <button data-act="exportPDF">📄 Export PDF</button>
+      <button data-act="exportPDF">📄 Export</button>
       <button data-act="changePassword">🔑 Change password</button>
       <button data-act="exportCSV">📊 Export Dive CSV</button>
       <button data-act="saveFile">💾 Save to JSON</button>
@@ -3199,25 +3211,32 @@ function exportOptions() {
   return new Promise(resolve => {
     const swmsF = swmsFile; const defPages = currentJob?.swms_pages_daily !== false;
     const d = document.createElement('dialog');
-    d.className = 'export-dlg';
-    d.style.cssText = 'border:none;border-radius:12px;padding:20px;max-width:440px;width:92vw;box-shadow:0 10px 40px rgba(0,0,0,.3);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#1a2332';
-    d.innerHTML = `<h3 style="margin:0 0 14px;color:#002060;font-size:18px">Export day sheet</h3>
-      <fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:700;font-size:13px;color:#5b6472;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Output</legend>
-        <label style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid #d7dde5;border-radius:8px;margin-bottom:8px;cursor:pointer"><input type="radio" name="exOut" value="download" checked style="margin-top:3px"><span><b>Download PDF</b><br><span style="color:#5b6472;font-size:13px">Saves a PDF file to this device${isIOS() ? ' (Save to Files from the share sheet)' : ''}</span></span></label>
-        <label style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid #d7dde5;border-radius:8px;cursor:pointer"><input type="radio" name="exOut" value="print" style="margin-top:3px"><span><b>Send to printer</b><br><span style="color:#5b6472;font-size:13px">Opens the print dialog</span></span></label>
-      </fieldset>
-      <label style="display:flex;gap:10px;align-items:flex-start;cursor:pointer${swmsF ? '' : ';opacity:.55'}"><input type="checkbox" id="exSwms" ${swmsF && defPages ? 'checked' : ''} ${swmsF ? '' : 'disabled'} style="margin-top:3px">
-        <span><b>Include the SWMS document pages</b><br><span style="color:#5b6472;font-size:13px">${swmsF ? `${esc(swmsF.name)}${swmsF.pages?.length ? ` · ${swmsF.pages.length} pages` : ''}. ` : 'No SWMS PDF attached to this sheet. '}The SWMS sign-off and all signatures are always included.</span></span></label>
-      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:20px"><button type="button" class="btn ghost" value="cancel">Cancel</button><button type="button" class="btn" value="ok">Export</button></div>`;
+    d.className = 'ex-dlg';
+    const pagesTxt = swmsF ? `${esc(swmsF.name)}${swmsF.pages?.length ? ` · ${swmsF.pages.length} pages` : ''}` : 'No SWMS PDF attached to this sheet';
+    d.innerHTML = `<h2>Export Day Sheet</h2>
+      <div class="f"><span>Output</span>
+        <div class="seg" id="exOut"><button type="button" data-v="download" class="active">Download PDF</button><button type="button" data-v="print">Send to printer</button></div>
+        <div class="hint" id="exOutHint"></div></div>
+      <div class="f"><span>SWMS document pages</span>
+        <div class="seg" id="exSwms"><button type="button" data-v="1" ${swmsF ? '' : 'disabled'}>Include</button><button type="button" data-v="0">Exclude</button></div>
+        <div class="hint">${pagesTxt}. The SWMS sign-off and all signatures are always included.</div></div>
+      <div class="sig-modal-actions"><button type="button" class="btn ghost" value="cancel">Cancel</button><button type="button" class="btn" value="ok">Export</button></div>`;
     document.body.appendChild(d);
+    const seg = (id, v) => d.querySelectorAll(`#${id} button`).forEach(b => b.classList.toggle('active', b.dataset.v === v));
+    const val = id => d.querySelector(`#${id} button.active`)?.dataset.v;
+    const hints = { download: `Saves a PDF file to this device${isIOS() ? ' — Save to Files or Mail from the share sheet' : ''}`, print: 'Opens the print dialog' };
+    const setOut = v => { seg('exOut', v); d.querySelector('#exOutHint').textContent = hints[v]; };
+    setOut('download'); seg('exSwms', swmsF && defPages ? '1' : '0');
+    d.querySelectorAll('#exOut button').forEach(b => b.onclick = () => setOut(b.dataset.v));
+    d.querySelectorAll('#exSwms button').forEach(b => b.onclick = () => seg('exSwms', b.dataset.v));
     const close = v => { d.close(); d.remove(); resolve(v); };
     d.querySelector('[value=cancel]').onclick = () => close(null);
     d.addEventListener('cancel', e => { e.preventDefault(); close(null); });
     d.querySelector('[value=ok]').onclick = () => {
-      const out = d.querySelector('input[name=exOut]:checked').value;
+      const out = val('exOut');
       // iPhone/iPad only allow the print tab to open inside this tap
       const tab = out === 'print' && isIOS() ? openReportTab() : null;
-      close({ out, swmsPages: !!d.querySelector('#exSwms')?.checked, tab });
+      close({ out, swmsPages: val('exSwms') === '1', tab });
     };
     d.showModal();
   });
@@ -3229,7 +3248,7 @@ async function exportPDF(el, ev, force = false) {
   const opt = await exportOptions(); if (!opt) return;
   if (opt.out === 'print' && navigator.standalone) {
     // iOS Home Screen apps can't print. Hand over to Safari, which can.
-    if (confirm('Printing needs Safari.\n\nOK opens this app in Safari — sign in, open this worksheet, then Options → Export PDF → Send to printer.')) window.open(location.href, '_blank');
+    if (confirm('Printing needs Safari.\n\nOK opens this app in Safari — sign in, open this worksheet, then Options → Export → Send to printer.')) window.open(location.href, '_blank');
     return;
   }
   const job  = $('#da_jobNo')?.value || 'Worksheet';
@@ -3384,9 +3403,9 @@ async function deliverPdf(blob, name) {
   const download = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 60000); };
   if (!isIOS()) { download(); toast(`✓ ${name} downloaded`, 2500); return; }
   const d = document.createElement('dialog');
-  d.style.cssText = 'border:none;border-radius:12px;padding:20px;max-width:400px;width:90vw;box-shadow:0 10px 40px rgba(0,0,0,.3);font:15px/1.45 -apple-system,system-ui,sans-serif;color:#1a2332';
-  d.innerHTML = `<h3 style="margin:0 0 8px;color:#002060">PDF ready</h3><p style="margin:0 0 16px;color:#5b6472">${esc(name)} · ${Math.max(1, Math.round(blob.size / 1024))} KB</p>
-    <div style="display:flex;gap:8px;justify-content:flex-end"><button type="button" class="btn ghost" value="x">Close</button><button type="button" class="btn" value="s">Save / Share</button></div>`;
+  d.className = 'ex-dlg';
+  d.innerHTML = `<h2>PDF Ready</h2><p class="hint" style="margin-bottom:14px">${esc(name)} · ${Math.max(1, Math.round(blob.size / 1024))} KB</p>
+    <div class="sig-modal-actions"><button type="button" class="btn ghost" value="x">Close</button><button type="button" class="btn" value="s">Save / Share</button></div>`;
   document.body.appendChild(d);
   const close = () => { d.close(); d.remove(); };
   d.querySelector('[value=x]').onclick = close;
