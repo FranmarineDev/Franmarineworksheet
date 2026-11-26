@@ -1,9 +1,9 @@
 /* Franmarine Daily Worksheet — service worker
  * Caches the app shell + the two CDN libraries so the app opens with no signal.
  * Bump CACHE whenever index.html changes so devices pick up the new version. */
-const CACHE = 'franmarine-ws-v39';
+const CACHE = 'franmarine-ws-v40';
 const SHELL = [
-  './', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png',
+  './', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './favicon.ico', './icon-32.png', './icon-180.png',
   'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
   'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js',
   'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.4/dist/umd/supabase.min.js',
