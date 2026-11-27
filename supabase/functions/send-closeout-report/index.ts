@@ -29,12 +29,14 @@ Deno.serve(async (req) => {
     if (rep.email_status === "sent") return json({ to: rep.emailed_to ?? [], cc: rep.emailed_cc ?? [], already: true });
 
     const region = rep.jobs?.region;
-    const { data: mgrs } = await admin.from("profiles").select("email").eq("role", "manager").eq("region", region);
-    const to = (mgrs ?? []).map((m) => m.email).filter(Boolean);
+    const { data: mgrs } = await admin.from("profiles").select("email, closeout_emails").eq("role", "manager").eq("region", region);
+    // managers who have opted out of the close-out emails (profiles.closeout_emails = false) are left off, CC included
+    const optedOut = new Set((mgrs ?? []).filter((m) => m.closeout_emails === false).map((m) => String(m.email).toLowerCase()));
+    const to = (mgrs ?? []).filter((m) => m.closeout_emails !== false).map((m) => m.email).filter(Boolean);
     // CC = standing CLOSEOUT_CC secret + any addresses the supervisor added on this day's sheet (client / stakeholders)
     const extra = Array.isArray(rep.extra_to) ? rep.extra_to : [];
     const cc = [...(Deno.env.get("CLOSEOUT_CC") ?? "").split(","), ...extra]
-      .map((s) => String(s).trim()).filter((e, i, a) => e && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e) && !to.includes(e) && a.indexOf(e) === i);
+      .map((s) => String(s).trim()).filter((e, i, a) => e && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e) && !to.includes(e) && !optedOut.has(e.toLowerCase()) && a.indexOf(e) === i);
     if (!to.length) { await admin.from("closeout_reports").update({ email_status: "failed", email_error: `no managers in ${region}` }).eq("id", report_id); return json({ error: `no managers in ${region}` }, 500); }
 
     const { data: file, error: dlErr } = await admin.storage.from("worksheet-files").download(rep.pdf_path);
