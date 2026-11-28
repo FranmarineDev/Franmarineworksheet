@@ -111,7 +111,7 @@ body{font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif
   font-size:13px;line-height:1.45}
 .lock-banner b{font-weight:700}
 #appView.locked #root :is(input,select,textarea):not([id^="inc_"]){pointer-events:none;background:#f4f6fa;color:#4b5563}
-#appView.locked #root :is(.btn,.link,.x,.drop,.rm,canvas,[data-act]):not(#page-inc *){pointer-events:none;opacity:.45}
+#appView.locked #root :is(.btn,.link,.x,.drop,.rm,canvas,[data-act]):not(#page-inc *):not(.skip-sign *){pointer-events:none;opacity:.45}
 #appView.locked .fab{display:none}
 img.pending{min-height:80px;background:repeating-linear-gradient(45deg,#f4f6fa,#f4f6fa 10px,#eef1f6 10px,#eef1f6 20px);
   color:var(--muted);font-size:12px;text-align:center}
@@ -690,6 +690,16 @@ td input.time24{font-weight:600;text-align:center}
 /* pop-up dialogs: the global margin reset pins <dialog> top-left — put them back in the centre of the screen */
 dialog{margin:auto;max-height:calc(100vh - 32px);overflow:auto}
 dialog::backdrop{background:rgba(0,0,0,.55)}
+.skip-sign{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;background:var(--navy-l);border:1px solid var(--border-2);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px;color:var(--navy);font-weight:600}
+.skip-sign .btn{min-height:40px;font-weight:700}
+#swmsSignSec{scroll-margin-top:120px}
+.read-dlg p{font-size:14px;margin-bottom:12px}
+.read-dlg ul{list-style:none;margin:0 0 14px;padding:0;display:flex;flex-direction:column;gap:6px}
+.read-dlg li{border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:13px}
+.read-dlg li b{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.3px;color:var(--muted);font-weight:500}
+.read-dlg li.none{border-color:var(--bad);color:var(--bad)}
+.read-dlg .sig-modal-actions .btn{flex:1;min-height:44px}
+@media(max-width:600px){.skip-sign .btn{width:100%}}
 .ex-dlg{border:none;border-radius:10px;padding:20px 22px;width:min(460px,calc(100vw - 32px));box-shadow:0 20px 60px rgba(0,0,0,.3);color:var(--text)}
 .ex-dlg h2{font-size:17px;color:var(--navy);padding-bottom:8px;border-bottom:2px solid var(--navy);margin-bottom:16px}
 .ex-dlg .f{display:flex;flex-direction:column;gap:4px;margin-bottom:14px}
@@ -1612,6 +1622,11 @@ function pageSWMS() {
   <section class="page" id="page-swms" data-tab="swms">
     <h1>📄 SWMS &amp; Dive Plan</h1>
 
+    <div class="skip-sign no-print">
+      <span>Read the documents below before you sign on.</span>
+      <button type="button" class="btn ghost" data-act="skipToSignOn">⬇ Skip to sign-on</button>
+    </div>
+
     <div class="sec diving-only" id="planSec">
       <h2>Dive Plan <span class="muted" style="text-transform:none;font-weight:400">WHS Reg 2025 s 178 / 182 — the appointed supervisor's plan, accessible to the crew for the whole job. Carries over day to day; replace it when a new revision is issued.</span></h2>
       <label class="drop" id="planDrop">
@@ -1665,7 +1680,7 @@ function pageSWMS() {
       </div>
     </div>
 
-    <div class="sec">
+    <div class="sec" id="swmsSignSec">
       <h2>Team Sign-Off</h2>
       <div class="muted mb">I have read and understood this SWMS and agree to work in accordance with its controls.</div>
       <div id="swms_signOff"></div>
@@ -2753,6 +2768,30 @@ function renderPlan() {
   if (!planFile) { c.innerHTML = ''; return; }
   c.innerHTML = fileBlock(planFile, 'removePlan');
   hydrateImages(c);
+}
+/* Skip to sign-on: jumps past the rendered SWMS / dive plan pages to Team Sign-Off, but only after the crew member
+   is reminded to read the documents — the signature is their declaration that they have. */
+function goToSignOn() { $('#swmsSignSec')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+function skipToSignOn() {
+  if (currentWs?.locked) { goToSignOn(); return; }   // signed-off sheet: nothing left to sign, just jump
+  const pg = e => e.pages?.length && !e.archived && !e.pending ? ` · ${e.pages.length} page${e.pages.length === 1 ? '' : 's'}` : '';
+  const docs = [['SWMS', swmsFile]]; if (divingMode) docs.push(['Dive Plan', planFile]);
+  const items = docs.map(([lbl, e]) => e
+    ? `<li><b>${lbl}</b>${esc(e.name)}${pg(e)}</li>`
+    : `<li class="none"><b>${lbl}</b>Not attached to this sheet — get it from your supervisor before signing on</li>`).join('');
+  const what = divingMode ? 'SWMS and the dive plan' : 'SWMS';
+  const d = document.createElement('dialog');
+  d.className = 'ex-dlg read-dlg';
+  d.innerHTML = `<h2>Have you read the documents?</h2>
+    <p>Read the ${what} on this page before you sign on. Your signature declares that you have read and understood ${divingMode ? 'them' : 'it'} and will work to the controls.</p>
+    <ul>${items}</ul>
+    <div class="sig-modal-actions"><button type="button" class="btn" value="back">Go back and read</button><button type="button" class="btn ghost" value="ok">I have read ${divingMode ? 'them' : 'it'} — sign on</button></div>`;
+  document.body.appendChild(d);
+  const close = go => { d.close(); d.remove(); if (go) goToSignOn(); };
+  d.querySelector('[value=back]').onclick = () => close(false);
+  d.querySelector('[value=ok]').onclick = () => close(true);
+  d.addEventListener('cancel', e => { e.preventDefault(); close(false); });
+  d.showModal();
 }
 function removePlan() { if (planFile) deleteRefs(planFile); planFile = null; renderPlan(); scheduleSave(); }
 
@@ -4615,6 +4654,7 @@ const ACT = {
   removeSubDive:  el => removeSubDive(+el.dataset.diver, +el.dataset.sub),
   removeSWMS:        removeSWMS,
   removePlan:        removePlan,
+  skipToSignOn:      skipToSignOn,
   removePermit:      el => removePermit(el.dataset.permitId),
   removeAllPermits:  removeAllPermits,
   toggleFloat:       toggleFloat,
